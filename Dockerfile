@@ -30,7 +30,7 @@ RUN pip install --upgrade pip && \
 COPY app/    ./app/
 COPY server/ ./server/
 COPY run.sh  ./run.sh
-COPY inference.py ./.env ./*.txt ./
+COPY inference.py ./*.txt ./
 
 # Make run script executable
 RUN chmod +x ./run.sh
