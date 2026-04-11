@@ -2,7 +2,7 @@
 title: Disaster Triage Environment
 emoji: 🚑
 colorFrom: red
-colorTo: orange
+colorTo: yellow
 sdk: docker
 pinned: false
 ---
