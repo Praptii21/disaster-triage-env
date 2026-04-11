@@ -287,42 +287,37 @@ async def health() -> HealthResponse:
     summary="Reset (or create) an environment session",
     tags=["Environment"],
 )
-async def reset(req: ResetRequest) -> ResetResponse:
+async def reset(body: dict = Body(default={})) -> ResetResponse:
     """
     OpenEnv /reset — initialise or re-initialise a session.
-
-    Returns **{ observation, done=false, info }**.
-    No `reward` field — reward is only defined after actions.
-
-    - **task_id**: session key (use `"easy"` | `"medium"` | `"hard"` or any custom string)
-    - **difficulty**: `easy` | `medium` | `hard`
-    - **seed**: optional int for reproducibility
     """
+    task_id    = body.get("task_id", "easy")
+    difficulty = body.get("difficulty", task_id)  # fallback to task_id if not provided
+    seed       = body.get("seed")
+
     try:
-        difficulty = Difficulty(req.difficulty.lower())
-    except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown difficulty '{req.difficulty}'. Must be: easy, medium, hard.",
-        )
+        diff_enum = Difficulty(difficulty.lower())
+    except (ValueError, AttributeError):
+        # Default to medium if difficulty is invalid or missing
+        diff_enum = Difficulty.MEDIUM
 
-    env = DisasterTriageEnv(difficulty=difficulty, seed=req.seed)
-    obs = env.reset(seed=req.seed)
+    env = DisasterTriageEnv(difficulty=diff_enum, seed=seed)
+    obs = env.reset(seed=seed)
 
-    _sessions[req.task_id]   = env
-    _created_at[req.task_id] = time.time()
+    _sessions[task_id]   = env
+    _created_at[task_id] = time.time()
 
     return ResetResponse(
-        task_id=req.task_id,
+        task_id=task_id,
         observation=obs.to_dict(),
         done=False,
         info={
             "message":    "Environment reset successfully.",
-            "task_id":    req.task_id,
-            "difficulty": difficulty.value,
+            "task_id":    task_id,
+            "difficulty": diff_enum.value,
             "num_zones":  env.config.num_zones,
             "max_steps":  env.config.max_steps,
-            "seed":       req.seed,
+            "seed":       seed,
         },
     )
 
@@ -333,23 +328,15 @@ async def reset(req: ResetRequest) -> ResetResponse:
     summary="Execute one action in the environment",
     tags=["Environment"],
 )
-async def step(req: ActionRequest) -> StepResponse:
+async def step(body: dict = Body(default={})) -> StepResponse:
     """
     OpenEnv /step — execute one action.
-
-    Returns **{ observation, reward, done, info }**.
-
-    - `reward` is **only** at the top level — never inside `info`.
-    - Intermediate step rewards are negative (action costs).
-    - Terminal reward (after `finalize`) is clamped to **[0, 1]**.
-
-    | Action type | Required fields |
-    |-------------|-----------------|
-    | `request_info` | `zone_id` |
-    | `allocate_resource` | `zone_id`, `resource_type`, `amount` |
-    | `finalize` | *(none)* |
     """
-    env    = _get_session(req.task_id)
+    task_id = body.get("task_id", "easy")
+    env     = _get_session(task_id)
+
+    # Convert dict to ActionRequest for parsing / validation
+    req    = ActionRequest(**body) if body else ActionRequest(task_id=task_id, action_type="request_info", zone_id="Z0")
     action = _parse_action(req)
 
     obs, reward, done, info = env.step(action)
