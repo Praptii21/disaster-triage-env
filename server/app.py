@@ -471,3 +471,4 @@ async def delete_session(
     del _sessions[task_id]
     _created_at.pop(task_id, None)
     return {"message": f"Session '{task_id}' deleted."}
+
