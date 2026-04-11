@@ -1,1 +1,63 @@
- 
+# OpenEnv Environment Configuration
+# https://github.com/metafaculty/openenv
+
+name: disaster-triage-env
+version: "1.0.0"
+description: >
+  A POMDP-based disaster triage RL environment where an agent must allocate
+  limited resources (food, water, medicine) across partially observable
+  disaster zones under a step budget.
+
+# Environment interface
+env:
+  server:
+    entrypoint: "uvicorn server.app:app --host 0.0.0.0 --port 7860"
+    health_check: "/health"
+  endpoints:
+    reset: "/reset"
+    step: "/step"
+    state: "/state"
+
+# Inference agent
+inference:
+  entrypoint: "python inference.py"
+  model_required: true
+
+# Task definitions
+tasks:
+  - id: easy
+    difficulty: easy
+    description: "3 zones, full observability, 15-step budget"
+    max_steps: 15
+
+  - id: medium
+    difficulty: medium
+    description: "5 zones, partial observability, 20-step budget"
+    max_steps: 20
+
+  - id: hard
+    difficulty: hard
+    description: "7 zones, hidden observability, 30-step budget"
+    max_steps: 30
+
+# Reward specification
+reward:
+  range: [0.0, 1.0]
+  terminal_only: false
+  step_rewards: true
+  description: >
+    Step rewards range from 0.01-0.10 based on action quality.
+    Final reward blends 75% grader score with 25% step quality,
+    scaled by difficulty factor.
+
+# Deployment
+deployment:
+  platform: huggingface
+  sdk: docker
+  port: 7860
+
+# Required secrets (set in HF Space settings)
+secrets:
+  - HF_TOKEN
+  - API_BASE_URL
+  - MODEL_NAME

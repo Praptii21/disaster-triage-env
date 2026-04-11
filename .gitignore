@@ -1,3 +1,28 @@
+# .gitignore
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+ENV/
+
+# Environment variables (CRITICAL: Never commit your keys!)
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Project specific
+uv.lock
+.cursor/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

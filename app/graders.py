@@ -33,9 +33,9 @@ HIGH_SEVERITY_THRESHOLD: int   = 4
 LOW_SEVERITY_THRESHOLD:  int   = 2
 
 # Critical zones must have received this fraction of their demand
-HIGH_SEVERITY_MIN_FRACTION: float = 0.60
-# Low-priority zones must NOT exceed this fraction of their demand
-LOW_SEVERITY_MAX_FRACTION:  float = 0.20
+HIGH_SEVERITY_MIN_FRACTION: float = 0.40
+# Low-priority zones — allocating up to this fraction is acceptable
+LOW_SEVERITY_MAX_FRACTION:  float = 0.40
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +84,10 @@ class DisasterTriageGrader:
             "prioritization": round(prioritization, 4),
             "efficiency":     round(efficiency, 4),
             "utilization":    round(utilization, 4),
-            "final_score":    round(float(np.clip(final_score, 0.0, 1.0)), 4),
+            "final_score":    round(float(np.clip(final_score, 0.01, 0.99)), 2),
         }
 
-        return float(np.clip(final_score, 0.0, 1.0)), breakdown
+        return round(float(np.clip(final_score, 0.01, 0.99)), 2), breakdown
 
     # -----------------------------------------------------------------------
     # Axis 1 – Prioritization Accuracy (50%)
@@ -106,11 +106,16 @@ class DisasterTriageGrader:
         if not zones:
             return 0.0
 
-        scores: List[float] = []
+        scores:  List[float] = []
+        weights: List[float] = []
 
         for zone in zones:
             demand_total = zone.true_demand.total()
             alloc_total  = zone.allocated.total()
+
+            # Weight: High severity (4-5) gets weight 2.0, others 1.0
+            weight = 2.0 if zone.true_severity >= HIGH_SEVERITY_THRESHOLD else 1.0
+            weights.append(weight)
 
             if demand_total <= 0.0:
                 scores.append(1.0)
@@ -119,34 +124,33 @@ class DisasterTriageGrader:
             fraction = alloc_total / demand_total
 
             if zone.true_severity >= HIGH_SEVERITY_THRESHOLD:
-                # ── Critical zone ──────────────────────────────────────────
-                # Full score if fraction ≥ threshold, heavy penalty below.
+                # High severity: reward proportionally, full score at 40%+ of demand
                 if fraction >= HIGH_SEVERITY_MIN_FRACTION:
                     score = 1.0
                 else:
-                    # Linearly interpolate but with a 0.5× severity multiplier
-                    score = (fraction / HIGH_SEVERITY_MIN_FRACTION) * 0.5
-
+                    # Gentler curve: partial credit scales smoothly
+                    score = (fraction / HIGH_SEVERITY_MIN_FRACTION) * 0.8
             elif zone.true_severity <= LOW_SEVERITY_THRESHOLD:
-                # ── Low-priority zone ──────────────────────────────────────
-                # Any allocation above 20% of demand is penalized.
                 if fraction <= LOW_SEVERITY_MAX_FRACTION:
                     score = 1.0
                 else:
+                    # Gentle penalty for over-serving low priority
                     excess = fraction - LOW_SEVERITY_MAX_FRACTION
-                    # Each 10% excess costs 0.2 score points
-                    score = max(0.0, 1.0 - excess * 2.0)
-
+                    score = max(0.0, 1.0 - excess * 1.0)
             else:
-                # ── Medium severity ────────────────────────────────────────
-                # Target is roughly 40–70% of demand.
-                target = 0.55  # midpoint of desired range
+                # Medium severity: broad acceptable range (20%-80%)
+                target = 0.50
                 distance = abs(fraction - target)
-                score = max(0.0, 1.0 - distance * 1.5)
+                score = max(0.0, 1.0 - distance * 1.0)
+
+            # Information Bonus: +0.05 if it's the highest severity zone and was revealed
+            is_highest = (zone.true_severity == max(z.true_severity for z in zones))
+            if is_highest and zone.revealed:
+                score = min(1.0, score + 0.05)
 
             scores.append(float(np.clip(score, 0.0, 1.0)))
 
-        return float(np.mean(scores))
+        return float(np.average(scores, weights=weights))
 
     # -----------------------------------------------------------------------
     # Axis 2 – Allocation Efficiency (30%)
@@ -185,7 +189,17 @@ class DisasterTriageGrader:
             return 1.0
 
         mae        = float(np.mean(errors))
-        efficiency = 1.0 - mae
+        # Softer efficiency curve: square root to reward partial effort
+        efficiency = 1.0 - (mae ** 0.7)
+
+        # Efficiency Penalty: Subtract 0.05 for every zone that is significantly over-allocated (>110%)
+        over_allocation_penalty = 0.0
+        for zone in zones:
+            if zone.true_demand.total() > 0:
+                if (zone.allocated.total() / zone.true_demand.total()) > 1.10:
+                    over_allocation_penalty += 0.05
+
+        efficiency = max(0.0, efficiency - over_allocation_penalty)
         return float(np.clip(efficiency, 0.0, 1.0))
 
     # -----------------------------------------------------------------------

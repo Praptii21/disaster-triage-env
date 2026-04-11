@@ -38,11 +38,33 @@ from app.models import (
 # Step-wise cost constants
 # ---------------------------------------------------------------------------
 
-INFO_COST:               float = -0.02   # per request_info
-ALLOCATION_COST:         float = -0.03   # per allocate_resource
-TEMPORAL_DECAY:          float = -0.01   # every step
-EFFICIENCY_BONUS_RATE:   float =  0.01   # per unused step at finalize
-INVALID_ACTION_PENALTY:  float = -0.20   # bad action (wrong zone id, etc.)
+INFO_COST:               float = 0.02    # internal cost per request_info
+ALLOCATION_COST:         float = 0.03    # internal cost per allocate_resource
+TEMPORAL_DECAY:          float = 0.01    # internal cost every step
+EFFICIENCY_BONUS_RATE:   float = 0.02    # per unused step at finalize
+INVALID_ACTION_PENALTY:  float = 0.10    # internal penalty for bad actions
+
+# Dense step-level reward tiers
+# Tier 1: Weak but valid          →  0.01 – 0.02
+# Tier 2: Good context-aware      →  0.03 – 0.05
+# Tier 3: Optimal severity match  →  0.06 – 0.10
+STEP_REWARD_REPEAT_INFO:      float = 0.005  # repeat request_info on revealed zone
+STEP_REWARD_NEW_INFO:         float = 0.02   # new zone revealed
+STEP_REWARD_NEW_INFO_HIGH:    float = 0.04   # revealed a high-severity zone (4-5)
+STEP_REWARD_WEAK_ALLOC:       float = 0.01   # valid alloc to low-severity zone
+STEP_REWARD_GOOD_ALLOC:       float = 0.03   # valid alloc to medium-severity zone
+STEP_REWARD_OPTIMAL_ALLOC:    float = 0.06   # alloc to high-severity with correct resource
+STEP_REWARD_PERFECT_ALLOC:    float = 0.10   # alloc to highest-severity with best resource match
+STEP_REWARD_WASTE_PENALTY:    float = 0.005  # reduced reward for over-allocation
+STEP_REWARD_DIVERSITY_BONUS:  float = 0.02   # bonus for allocating to a new zone
+MAX_STEP_REWARD:              float = 0.10   # cap per step
+
+# Difficulty scaling factors (subtle, prevents Hard > Easy)
+DIFFICULTY_SCALE = {
+    "easy":   1.00,   # no penalty
+    "medium": 0.97,   # ~3% scaling
+    "hard":   0.92,   # ~8% scaling
+}
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +105,9 @@ class DisasterTriageEnv:
         self._initial_resources:   ResourceBundle      = ResourceBundle()
         self.step_count:           int                 = 0
         self.accumulated_costs:    float               = 0.0
+        self.step_quality_sum:     float               = 0.0   # sum of step rewards
+        self.step_quality_count:   int                 = 0     # number of scored steps
+        self._zones_allocated_to:  set                 = set() # track zone diversity
         self.done:                 bool                = False
         self.episode_result:       Optional[EpisodeResult] = None
 
@@ -116,10 +141,13 @@ class DisasterTriageEnv:
             water=self.config.initial_resources.water,
             medicine=self.config.initial_resources.medicine,
         )
-        self.step_count        = 0
-        self.accumulated_costs = 0.0
-        self.done              = False
-        self.episode_result    = None
+        self.step_count         = 0
+        self.accumulated_costs  = 0.0
+        self.step_quality_sum   = 0.0
+        self.step_quality_count = 0
+        self._zones_allocated_to = set()
+        self.done               = False
+        self.episode_result     = None
 
         self._apply_initial_observability()
         return self._build_observation()
@@ -146,10 +174,11 @@ class DisasterTriageEnv:
         # --- validate --------------------------------------------------------
         valid, err = action.validate()
         if not valid:
-            info = {"valid": False, "error": err, "action": action.to_dict()}
+            self.accumulated_costs += INVALID_ACTION_PENALTY
+            info = {"valid": False, "error": err, "action": action.to_dict(), "step": self.step_count}
             return (
                 self._build_observation(),
-                INVALID_ACTION_PENALTY,
+                0.0,
                 False,
                 info,
             )
@@ -178,15 +207,23 @@ class DisasterTriageEnv:
 
         # --- advance step counter -------------------------------------------
         self.step_count        += 1
-        self.accumulated_costs += abs(reward)
+        self.accumulated_costs += reward  # reward here is the positive cost component
         info["step"]            = self.step_count
+
+        # --- compute dense step-level reward signal --------------------------
+        step_reward = self._compute_step_reward(action, info)
+
+        self.step_quality_sum   += step_reward
+        self.step_quality_count += 1
+        info["step_reward"] = round(step_reward, 2)
 
         # --- check step budget -----------------------------------------------
         if self.step_count >= self.config.max_steps:
             # Force finalize when the budget is exhausted
             return self._handle_finalize(step_cost=0.0)
 
-        return self._build_observation(), reward, self.done, info
+        # Return the step_reward for intermediate steps
+        return self._build_observation(), round(step_reward, 2), self.done, info
 
     def render(self, mode: str = "human") -> Optional[dict]:
         """Pretty-print or return the current observation as a dict."""
@@ -224,8 +261,8 @@ class DisasterTriageEnv:
                 "demand":   zone.true_demand.to_dict(),
             }
 
-        reward       = base_cost + INFO_COST
-        info["reward"] = round(reward, 4)
+        reward         = TEMPORAL_DECAY + INFO_COST
+        info["reward"] = 0.0
         return reward, info
 
     def _handle_allocate(
@@ -269,8 +306,8 @@ class DisasterTriageEnv:
             "resource": resource.value,
             "amount":   round(requested, 4),
         }
-        reward         = base_cost + ALLOCATION_COST
-        info["reward"] = round(reward, 4)
+        reward         = TEMPORAL_DECAY + ALLOCATION_COST
+        info["reward"] = 0.0
         return reward, info
 
     def _handle_finalize(
@@ -286,8 +323,6 @@ class DisasterTriageEnv:
         )
 
         # --- Zero-allocation penalty ------------------------------------
-        # If the agent never deployed any resources, it cannot be rewarded.
-        # Multiply final_score by 0.3 to strongly discourage do-nothing policies.
         total_allocated = sum(
             z.allocated.total() for z in self.zones
         )
@@ -297,21 +332,36 @@ class DisasterTriageEnv:
         else:
             score_breakdown["zero_allocation_penalty"] = False
 
-        # --- Efficiency bonus -------------------------------------------
-        # Reward finishing early, but scaled down so it doesn't dominate.
-        efficiency_bonus = (
-            (self.config.max_steps - self.step_count) * EFFICIENCY_BONUS_RATE
-        )
+        # --- Step quality score (0-1) -----------------------------------
+        # Normalize against realistic expected reward per step (0.04),
+        # not the theoretical max (0.10), to avoid crushing the score.
+        EXPECTED_AVG_STEP_REWARD = 0.04
+        if self.step_quality_count > 0:
+            max_possible = self.step_quality_count * EXPECTED_AVG_STEP_REWARD
+            step_quality = self.step_quality_sum / max_possible if max_possible > 0 else 0.0
+        else:
+            step_quality = 0.0
+        step_quality = float(np.clip(step_quality, 0.0, 1.0))
 
-        # Total Reward = clamp(final_score - total_cost + efficiency_bonus, 0, 1)
-        raw_reward   = final_score - self.accumulated_costs + efficiency_bonus + step_cost
-        total_reward = float(np.clip(raw_reward, 0.0, 1.0))
+        # --- Blended reward: 75% grader + 25% step quality ---------------
+        blended_score = 0.75 * final_score + 0.25 * step_quality
+
+        # --- Difficulty scaling ------------------------------------------
+        diff_scale = DIFFICULTY_SCALE.get(self.difficulty.value, 1.0)
+        scaled_score = blended_score * diff_scale
+
+        # --- Final reward ------------------------------------------------
+        total_reward = round(float(np.clip(scaled_score, 0.01, 0.99)), 2)
+
+        score_breakdown["step_quality"] = round(step_quality, 4)
+        score_breakdown["difficulty_scale"] = diff_scale
+        score_breakdown["blended_score"] = round(blended_score, 4)
 
         self.episode_result = EpisodeResult(
             total_reward=total_reward,
             step_costs=self.accumulated_costs,
             final_score=final_score,
-            efficiency_bonus=efficiency_bonus,
+            efficiency_bonus=0.0,
             prioritization_score=score_breakdown["prioritization"],
             allocation_efficiency=score_breakdown["efficiency"],
             resource_utilization=score_breakdown["utilization"],
@@ -331,6 +381,85 @@ class DisasterTriageEnv:
             True,
             info,
         )
+
+    # ==========================================================================
+    # Dense step reward computation
+    # ==========================================================================
+
+    def _compute_step_reward(self, action: Action, info: dict) -> float:
+        """
+        Compute a dense, context-aware step reward signal.
+
+        Reward tiers:
+          Tier 1 (Weak):    0.01 – 0.02  → valid but low-impact action
+          Tier 2 (Good):    0.03 – 0.05  → context-aware allocation
+          Tier 3 (Optimal): 0.06 – 0.10  → perfect severity-resource alignment
+
+        Bonuses:
+          +0.02 diversity bonus for first allocation to a new zone
+
+        Penalties:
+          -0.005 waste penalty for over-allocation (>100% of demand)
+        """
+        step_reward = 0.0
+
+        # ── REQUEST_INFO ─────────────────────────────────────────────────
+        if action.action_type == ActionType.REQUEST_INFO:
+            if info.get("revealed"):
+                zone = self._get_zone(action.zone_id)
+                if zone and zone.true_severity >= 4:
+                    step_reward = STEP_REWARD_NEW_INFO_HIGH   # 0.04 — discovered critical zone
+                else:
+                    step_reward = STEP_REWARD_NEW_INFO        # 0.02 — useful discovery
+            else:
+                step_reward = STEP_REWARD_REPEAT_INFO         # 0.005 — repeat, minimal signal
+
+        # ── ALLOCATE_RESOURCE ────────────────────────────────────────────
+        elif action.action_type == ActionType.ALLOCATE_RESOURCE:
+            if info.get("allocated"):
+                zone = self._get_zone(action.zone_id)
+                if zone is None:
+                    return 0.0
+
+                severity = zone.true_severity
+                resource = action.resource_type
+                demand_val = getattr(zone.true_demand, resource.value, 0)
+                alloc_val  = getattr(zone.allocated, resource.value, 0)
+
+                # --- Base tier by severity ---
+                if severity >= 5:
+                    # Tier 3: highest severity → check resource alignment
+                    if resource == ResourceType.MEDICINE:
+                        step_reward = STEP_REWARD_PERFECT_ALLOC   # 0.10 — perfect match
+                    elif resource == ResourceType.WATER:
+                        step_reward = STEP_REWARD_OPTIMAL_ALLOC   # 0.06 — strong match
+                    else:
+                        step_reward = STEP_REWARD_GOOD_ALLOC      # 0.03 — acceptable
+                elif severity >= 4:
+                    # Tier 2-3: high severity
+                    if resource == ResourceType.MEDICINE:
+                        step_reward = STEP_REWARD_OPTIMAL_ALLOC   # 0.06
+                    else:
+                        step_reward = STEP_REWARD_GOOD_ALLOC      # 0.03
+                elif severity >= 3:
+                    # Tier 2: medium severity
+                    step_reward = STEP_REWARD_GOOD_ALLOC          # 0.03
+                else:
+                    # Tier 1: low severity
+                    step_reward = STEP_REWARD_WEAK_ALLOC          # 0.01
+
+                # --- Diversity bonus: first time allocating to this zone ---
+                if zone.zone_id not in self._zones_allocated_to:
+                    step_reward += STEP_REWARD_DIVERSITY_BONUS    # +0.02
+                    self._zones_allocated_to.add(zone.zone_id)
+
+                # --- Waste penalty: over-allocated beyond demand ---
+                if demand_val > 0 and alloc_val > demand_val * 1.1:
+                    step_reward = max(0.0, step_reward - STEP_REWARD_WASTE_PENALTY)  # -0.005
+
+        # Clamp to [0, MAX_STEP_REWARD]
+        return round(float(np.clip(step_reward, 0.0, MAX_STEP_REWARD)), 2)
+
 
     # ==========================================================================
     # Zone generation

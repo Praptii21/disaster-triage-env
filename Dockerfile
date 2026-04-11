@@ -1,42 +1,30 @@
-# ── Stage 1: base image ───────────────────────────────────────────────────────
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
 # Prevent .pyc files and enable unbuffered logs
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=7860
 
-# Install system deps (needed for some numpy builds)
+# Install system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Stage 2: install Python dependencies ──────────────────────────────────────
-COPY pyproject.toml ./
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install the project dependencies from pyproject.toml
-RUN pip install --upgrade pip && \
-    pip install "numpy>=1.26.0" \
-                "fastapi>=0.110.0" \
-                "uvicorn[standard]>=0.29.0" \
-                "pydantic>=2.6.0" \
-                "python-dotenv>=1.0.0" \
-                "requests>=1.0.0" \
-                "openai>=1.0.0"
+# Copy the entire project
+COPY . .
 
-# ── Stage 3: copy source code ─────────────────────────────────────────────────
-COPY app/    ./app/
-COPY server/ ./server/
-COPY run.sh  ./run.sh
-COPY inference.py ./*.txt ./
+# Make start script executable
+RUN chmod +x start.sh
 
-# Make run script executable
-RUN chmod +x ./run.sh
-
-# ── Stage 4: expose & run ─────────────────────────────────────────────────────
+# Expose the default HF port
 EXPOSE 7860
 
-CMD ["/bin/bash", "./run.sh"]
+# Use the startup script to run both server and inference
+CMD ["./start.sh"]

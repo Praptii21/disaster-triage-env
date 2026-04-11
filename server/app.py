@@ -247,8 +247,8 @@ def _strip_reward_from_info(info: dict) -> dict:
 
 
 def _clamp_reward(reward: float) -> float:
-    """Clamp terminal reward to [0, 1]; intermediate costs may be negative."""
-    return float(np.clip(reward, 0.0, 1.0))
+    """Clamp terminal reward strictly between (0, 1) for compliance."""
+    return round(float(np.clip(reward, 0.01, 0.99)), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +354,8 @@ async def step(req: ActionRequest) -> StepResponse:
 
     obs, reward, done, info = env.step(action)
 
-    # Clamp only terminal rewards to [0,1]; leave intermediate costs as-is
-    final_reward = _clamp_reward(reward) if done else round(reward, 6)
+    # Clamp only terminal rewards to [0.01, 0.99]; leave intermediate costs as-is
+    final_reward = _clamp_reward(reward) if done else round(float(reward), 2)
 
     # OpenEnv: reward must NOT appear inside info
     clean_info = _strip_reward_from_info(info)
