@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import Body, FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -287,19 +287,24 @@ async def health() -> HealthResponse:
     summary="Reset (or create) an environment session",
     tags=["Environment"],
 )
-async def reset(body: dict = Body(default={})) -> ResetResponse:
+async def reset(request: Request) -> ResetResponse:
     """
-    OpenEnv /reset — initialise or re-initialise a session.
+    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
+    Handles missing or empty bodies by defaulting to 'easy'.
     """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
     task_id    = body.get("task_id", "easy")
-    difficulty = body.get("difficulty", task_id)  # fallback to task_id if not provided
+    difficulty = body.get("difficulty", task_id)
     seed       = body.get("seed")
 
     try:
-        diff_enum = Difficulty(difficulty.lower())
+        diff_enum = Difficulty(str(difficulty).lower())
     except (ValueError, AttributeError):
-        # Default to medium if difficulty is invalid or missing
-        diff_enum = Difficulty.MEDIUM
+        diff_enum = Difficulty.EASY
 
     env = DisasterTriageEnv(difficulty=diff_enum, seed=seed)
     obs = env.reset(seed=seed)
@@ -315,8 +320,6 @@ async def reset(body: dict = Body(default={})) -> ResetResponse:
             "message":    "Environment reset successfully.",
             "task_id":    task_id,
             "difficulty": diff_enum.value,
-            "num_zones":  env.config.num_zones,
-            "max_steps":  env.config.max_steps,
             "seed":       seed,
         },
     )
@@ -328,27 +331,33 @@ async def reset(body: dict = Body(default={})) -> ResetResponse:
     summary="Execute one action in the environment",
     tags=["Environment"],
 )
-async def step(body: dict = Body(default={})) -> StepResponse:
+async def step(request: Request) -> StepResponse:
     """
-    OpenEnv /step — execute one action.
+    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
     """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
     task_id = body.get("task_id", "easy")
     env     = _get_session(task_id)
 
-    # Convert dict to ActionRequest for parsing / validation
-    req    = ActionRequest(**body) if body else ActionRequest(task_id=task_id, action_type="request_info", zone_id="Z0")
-    action = _parse_action(req)
+    # Use default action if body is missing/empty
+    try:
+        req = ActionRequest(**body)
+    except Exception:
+        req = ActionRequest(task_id=task_id, action_type="request_info", zone_id="Z0")
 
+    action = _parse_action(req)
     obs, reward, done, info = env.step(action)
 
-    # Clamp only terminal rewards to [0.01, 0.99]; leave intermediate costs as-is
+    # Clamp only terminal rewards to [0.01, 0.99]
     final_reward = _clamp_reward(reward) if done else round(float(reward), 2)
-
-    # OpenEnv: reward must NOT appear inside info
-    clean_info = _strip_reward_from_info(info)
+    clean_info   = _strip_reward_from_info(info)
 
     return StepResponse(
-        task_id=req.task_id,
+        task_id=task_id,
         observation=obs.to_dict(),
         reward=final_reward,
         done=done,
