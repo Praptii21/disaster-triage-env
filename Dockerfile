@@ -22,13 +22,20 @@ RUN pip install --upgrade pip && \
                 "fastapi>=0.110.0" \
                 "uvicorn[standard]>=0.29.0" \
                 "pydantic>=2.6.0" \
-                "python-dotenv>=1.0.0"
+                "python-dotenv>=1.0.0" \
+                "requests>=1.0.0" \
+                "openai>=1.0.0"
 
 # ── Stage 3: copy source code ─────────────────────────────────────────────────
 COPY app/    ./app/
 COPY server/ ./server/
+COPY run.sh  ./run.sh
+COPY inference.py ./.env ./*.txt ./
+
+# Make run script executable
+RUN chmod +x ./run.sh
 
 # ── Stage 4: expose & run ─────────────────────────────────────────────────────
 EXPOSE 7860
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["/bin/bash", "./run.sh"]

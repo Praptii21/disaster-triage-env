@@ -66,7 +66,7 @@ client = OpenAI(
 # Server interaction helpers
 # ---------------------------------------------------------------------------
 
-ENV_SERVER_URL: str = "http://127.0.0.1:8000"   # local FastAPI server
+ENV_SERVER_URL: str = "http://127.0.0.1:7860"   # local FastAPI server
 
 
 def _post(path: str, payload: dict) -> dict:
