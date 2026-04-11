@@ -80,14 +80,18 @@ class DisasterTriageGrader:
             + W_UTILIZATION  * utilization
         )
 
+        # STRICT COMPLIANCE: Force score into (0.01, 0.99) range.
+        # No exactly 0.0, no exactly 1.0.
+        clamped_score = float(np.clip(final_score, 0.01, 0.99))
+
         breakdown: Dict[str, float] = {
             "prioritization": round(prioritization, 4),
             "efficiency":     round(efficiency, 4),
             "utilization":    round(utilization, 4),
-            "final_score":    round(float(np.clip(final_score, 0.01, 0.99)), 2),
+            "final_score":    round(clamped_score, 3),
         }
 
-        return round(float(np.clip(final_score, 0.01, 0.99)), 2), breakdown
+        return round(clamped_score, 3), breakdown
 
     # -----------------------------------------------------------------------
     # Axis 1 – Prioritization Accuracy (50%)

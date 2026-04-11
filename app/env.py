@@ -351,7 +351,8 @@ class DisasterTriageEnv:
         scaled_score = blended_score * diff_scale
 
         # --- Final reward ------------------------------------------------
-        total_reward = round(float(np.clip(scaled_score, 0.01, 0.99)), 2)
+        # STRICT COMPLIANCE: Force score into (0.01, 0.99) range.
+        total_reward = round(float(np.clip(scaled_score, 0.01, 0.99)), 3)
 
         score_breakdown["step_quality"] = round(step_quality, 4)
         score_breakdown["difficulty_scale"] = diff_scale
@@ -457,8 +458,8 @@ class DisasterTriageEnv:
                 if demand_val > 0 and alloc_val > demand_val * 1.1:
                     step_reward = max(0.0, step_reward - STEP_REWARD_WASTE_PENALTY)  # -0.005
 
-        # Clamp to [0, MAX_STEP_REWARD]
-        return round(float(np.clip(step_reward, 0.0, MAX_STEP_REWARD)), 2)
+        # STRICT COMPLIANCE: Step rewards must also be in (0.01, 0.99)
+        return round(float(np.clip(step_reward, 0.01, 0.99)), 3)
 
 
     # ==========================================================================

@@ -248,7 +248,7 @@ def _strip_reward_from_info(info: dict) -> dict:
 
 def _clamp_reward(reward: float) -> float:
     """Clamp terminal reward strictly between (0, 1) for compliance."""
-    return round(float(np.clip(reward, 0.01, 0.99)), 2)
+    return round(float(np.clip(reward, 0.01, 0.99)), 3)
 
 
 # ---------------------------------------------------------------------------
