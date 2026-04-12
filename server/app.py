@@ -21,7 +21,6 @@ from app.models import (
     ResourceType,
 )
 
-# Import the brain for simulation decisions
 try:
     from inference import get_scripted_action, get_llm_action
 except Exception as e:
@@ -29,27 +28,13 @@ except Exception as e:
     def get_scripted_action(obs, step, task): return {"action_type": "finalize"}
     def get_llm_action(hist, obs, step, task): return {"action_type": "finalize"}
 
-# ---------------------------------------------------------------------------
-# Session store  (task_id → env)
-# ---------------------------------------------------------------------------
-
 _sessions:   Dict[str, DisasterTriageEnv] = {}
 _created_at: Dict[str, float]             = {}
 
 def _get_session(task_id: str) -> DisasterTriageEnv:
     if task_id not in _sessions:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Session '{task_id}' not found. "
-                "Call POST /reset first to initialise an environment."
-            ),
-        )
+        raise HTTPException(status_code=404, detail=f"Session '{task_id}' not found.")
     return _sessions[task_id]
-
-# ---------------------------------------------------------------------------
-# Lifespan — bootstrap default sessions for each difficulty
-# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,10 +51,6 @@ async def lifespan(app: FastAPI):
     _sessions.clear()
     _created_at.clear()
 
-# ---------------------------------------------------------------------------
-# App Initialization
-# ---------------------------------------------------------------------------
-
 app = FastAPI(
     title="Disaster Triage RL Environment",
     description="OpenEnv-compliant HTTP wrapper & Gradio Dashboard.",
@@ -77,57 +58,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ---------------------------------------------------------------------------
-# Request / Response schemas
-# ---------------------------------------------------------------------------
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class ResetResponse(BaseModel):
-    task_id:     str
-    observation: Dict[str, Any]
-    done:        bool = False
-    info:        Dict[str, Any]
+    task_id: str; observation: Dict[str, Any]; done: bool = False; info: Dict[str, Any]
 
 class StepResponse(BaseModel):
-    task_id:     str
-    observation: Dict[str, Any]
-    reward:      float
-    done:        bool
-    info:        Dict[str, Any]
+    task_id: str; observation: Dict[str, Any]; reward: float; done: bool; info: Dict[str, Any]
 
 class HealthResponse(BaseModel):
-    status:          str
-    version:         str
-    active_sessions: int
-    sessions:        Dict[str, Dict[str, Any]]
+    status: str; version: str; active_sessions: int; sessions: Dict[str, Dict[str, Any]]
 
 class ActionRequest(BaseModel):
     task_id:       str             = Field("medium")
-    action_type:   str             = Field(..., description="request_info | allocate_resource | finalize")
+    action_type:   str             = Field(...)
     zone_id:       Optional[str]   = Field(None)
     resource_type: Optional[str]   = Field(None)
     amount:        Optional[float] = Field(None, gt=0)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _parse_action(req: ActionRequest) -> Action:
     action_type = ActionType(req.action_type)
     resource_type = ResourceType(req.resource_type) if req.resource_type else None
-    action = Action(
-        action_type=action_type,
-        zone_id=req.zone_id,
-        resource_type=resource_type,
-        amount=req.amount,
-    )
-    return action
+    return Action(action_type=action_type, zone_id=req.zone_id, resource_type=resource_type, amount=req.amount)
 
 def _strip_reward_from_info(info: dict) -> dict:
     return {k: v for k, v in info.items() if k != "reward"}
@@ -135,109 +87,230 @@ def _strip_reward_from_info(info: dict) -> dict:
 def _clamp_reward(reward: float) -> float:
     return round(float(np.clip(reward, 0.01, 0.99)), 3)
 
-# ---------------------------------------------------------------------------
-# REST API Routes
-# ---------------------------------------------------------------------------
-
-@app.get("/health", response_model=HealthResponse, summary="Server liveness check", tags=["System"])
+@app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health() -> HealthResponse:
     session_info = {}
     for tid, env in _sessions.items():
-        session_info[tid] = {
-            "difficulty":  env.difficulty.value,
-            "done":        env.done,
-            "step_count":  env.step_count,
-            "age_seconds": round(time.time() - _created_at.get(tid, 0), 1),
-        }
+        session_info[tid] = {"difficulty": env.difficulty.value, "done": env.done, "step_count": env.step_count, "age_seconds": round(time.time() - _created_at.get(tid, 0), 1)}
     return HealthResponse(status="ok", version="1.0.0", active_sessions=len(_sessions), sessions=session_info)
 
-@app.post("/reset", response_model=ResetResponse, summary="Reset environment", tags=["Environment"])
+@app.post("/reset", response_model=ResetResponse, tags=["Environment"])
 async def reset(request: Request) -> ResetResponse:
     try: body = await request.json()
     except: body = {}
-    task_id = body.get("task_id", "medium")
-    difficulty = body.get("difficulty", "medium")
-    seed = body.get("seed")
-    env = DisasterTriageEnv.make(difficulty, seed=seed)
-    obs = env.reset(seed=seed)
-    _sessions[task_id] = env
-    _created_at[task_id] = time.time()
+    task_id = body.get("task_id", "medium"); difficulty = body.get("difficulty", "medium"); seed = body.get("seed")
+    env = DisasterTriageEnv.make(difficulty, seed=seed); obs = env.reset(seed=seed)
+    _sessions[task_id] = env; _created_at[task_id] = time.time()
     return ResetResponse(task_id=task_id, observation=obs.to_dict(), done=False, info={"task_id": task_id, "difficulty": difficulty})
 
-@app.post("/step", response_model=StepResponse, summary="Step action", tags=["Environment"])
+@app.post("/step", response_model=StepResponse, tags=["Environment"])
 async def step(request: Request) -> StepResponse:
     try: body = await request.json()
     except: body = {}
-    task_id = body.get("task_id", "medium")
-    env = _get_session(task_id)
-    req = ActionRequest(**body)
-    action = _parse_action(req)
+    task_id = body.get("task_id", "medium"); env = _get_session(task_id)
+    req = ActionRequest(**body); action = _parse_action(req)
     obs, reward, done, info = env.step(action)
     return StepResponse(task_id=task_id, observation=obs.to_dict(), reward=_clamp_reward(reward), done=done, info=_strip_reward_from_info(info))
 
 # ---------------------------------------------------------------------------
-# Gradio Dashboard Logic
+# Gradio Dashboard
 # ---------------------------------------------------------------------------
 
 def run_simulation(task: str) -> Generator:
-    # Use internal unified port 7860
     base_url = "http://127.0.0.1:7860"
-    logs = [f"> Initializing simulation: {task.upper()}"]
+    logs = [f"◈ INITIALIZING MISSION: {task.upper()}"]
     yield "\n".join(logs)
-    
+
     try:
         resp = requests.post(f"{base_url}/reset", json={"task_id": "dashboard", "difficulty": task})
         if resp.status_code != 200:
-            logs.append(f"ERROR: Reset failed ({resp.status_code})")
+            logs.append(f"✗ RESET FAILED ({resp.status_code})")
             yield "\n".join(logs); return
-        
+
         data = resp.json(); obs = data.get("observation", {}); done = data.get("done", False)
         history = []; step_n = 0; rewards_list = []
         model = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
-        
-        # [START] task=<task_name> env=disaster-triage-env model=<model_name>
+
         logs.append(f"[START] task={task} env=disaster-triage-env model={model}")
+        logs.append("─" * 60)
         yield "\n".join(logs)
 
         while not done:
             step_n += 1
-            try: action = get_llm_action(history, obs, step_n, task)
+            try:
+                action = get_llm_action(history, obs, step_n, task)
             except Exception as e:
-                logs.append(f"AGENT_WARN: {str(e)[:50]}... Falling back to scripted.")
+                logs.append(f"  ⚠ LLM fallback: {str(e)[:40]}...")
                 action = get_scripted_action(obs, step_n, task)
 
             resp = requests.post(f"{base_url}/step", json={"task_id": "dashboard", **action})
             if resp.status_code != 200:
-                logs.append(f"ERROR: Step failed ({resp.status_code})"); break
-                
+                logs.append(f"✗ STEP FAILED ({resp.status_code})"); break
+
             res = resp.json(); obs = res.get("observation", {}); reward = res.get("reward", 0.0)
             done = res.get("done", False)
             rewards_list.append(reward)
-            
-            # [STEP] step=N action={...} reward=0.0000 done=false error=null
+
+            action_type = action.get("action_type", "")
+            zone = action.get("zone_id", "")
+            resource = action.get("resource_type", "")
+            amount = action.get("amount", "")
+
+            # Pretty action label
+            if action_type == "request_info":
+                action_label = f"🔍 INFO      {zone}"
+            elif action_type == "allocate_resource":
+                action_label = f"📦 ALLOCATE  {zone} ← {resource} ×{amount}"
+            elif action_type == "finalize":
+                action_label = f"✔  FINALIZE"
+            else:
+                action_label = action_type
+
+            reward_bar = "█" * int(reward * 20)
             action_json = json.dumps(action, separators=(',', ':'))
-            logs.append(f"[STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null")
+            logs.append(
+                f"  [{step_n:02d}] {action_label:<35} reward={reward:.4f} {reward_bar}"
+            )
+            logs.append(
+                f"       [STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null"
+            )
             yield "\n".join(logs)
             time.sleep(1.0)
 
-        # [END] success=true steps=12 score=0.337 rewards=0.04,0.03...
+        logs.append("─" * 60)
         mission_score = rewards_list[-1] if rewards_list else 0.001
         rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
+        total = sum(rewards_list)
+        status = "✔ MISSION SUCCESS" if done else "✗ MISSION INCOMPLETE"
+        logs.append(f"{status}")
         logs.append(f"[END] success={str(done).lower()} steps={step_n} score={mission_score:.3f} rewards={rewards_str}")
+        logs.append(f"  Total reward collected: {total:.3f}")
         yield "\n".join(logs)
-    except Exception as e:
-        logs.append(f"fatal_error: {str(e)}"); yield "\n".join(logs)
 
-with gr.Blocks(title="Disaster Triage Console", theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate")) as demo:
-    gr.Markdown("# 🚑 Disaster Triage Console")
-    gr.Markdown("Real-time mission coordination and environment logs.")
+    except Exception as e:
+        logs.append(f"✗ FATAL: {str(e)}")
+        yield "\n".join(logs)
+
+
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
+
+body, .gradio-container {
+    background: #0a0e17 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+.gradio-container {
+    max-width: 900px !important;
+    margin: 0 auto !important;
+    padding: 2rem !important;
+}
+
+#title-block {
+    border-left: 3px solid #ff4444;
+    padding-left: 1.2rem;
+    margin-bottom: 2rem;
+}
+
+#title-block h1 {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.3rem 0 !important;
+}
+
+#title-block p {
+    color: #ff4444 !important;
+    font-size: 0.75rem !important;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin: 0 !important;
+}
+
+.label-wrap label span {
+    color: #4a5568 !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+select, .gr-dropdown select {
+    background: #111827 !important;
+    border: 1px solid #1f2937 !important;
+    color: #e2e8f0 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    border-radius: 4px !important;
+}
+
+button.primary {
+    background: #ff4444 !important;
+    border: none !important;
+    color: white !important;
+    font-family: 'Syne', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.05em;
+    border-radius: 4px !important;
+    transition: all 0.2s !important;
+}
+
+button.primary:hover {
+    background: #cc2222 !important;
+    transform: translateY(-1px) !important;
+}
+
+textarea {
+    background: #050810 !important;
+    border: 1px solid #1f2937 !important;
+    color: #00ff88 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.78rem !important;
+    line-height: 1.7 !important;
+    border-radius: 4px !important;
+    padding: 1rem !important;
+}
+
+footer { display: none !important; }
+"""
+
+with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
+
+    with gr.Column(elem_id="title-block"):
+        gr.HTML("""
+        <div id="title-block">
+            <h1>🚨 DISASTER TRIAGE</h1>
+            <p>Resource Allocation Command Center // OpenEnv Agent</p>
+        </div>
+        """)
+
     with gr.Row():
-        task_input = gr.Dropdown(["easy", "medium", "hard"], value="medium", label="Mission Priority")
-        start_btn = gr.Button("🚀 Start Simulation", variant="primary")
-    log_output = gr.Textbox(label="Terminal Feed", lines=25, max_lines=30, interactive=False, autoscroll=True)
+        task_input = gr.Dropdown(
+            choices=["easy", "medium", "hard"],
+            value="medium",
+            label="MISSION PRIORITY",
+            scale=1,
+        )
+        start_btn = gr.Button(
+            "▶ DEPLOY AGENT",
+            variant="primary",
+            scale=1,
+        )
+
+    gr.HTML("<div style='height:12px'></div>")
+
+    log_output = gr.Textbox(
+        label="MISSION FEED",
+        lines=28,
+        max_lines=35,
+        interactive=False,
+        autoscroll=True,
+        placeholder="Awaiting deployment order...",
+    )
+
     start_btn.click(fn=run_simulation, inputs=[task_input], outputs=[log_output])
 
-# Mount Gradio into FastAPI
 app = gr.mount_gradio_app(app, demo, path="/")
 
 def main():
