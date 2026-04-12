@@ -12,7 +12,7 @@ Logging output (stdout only):
   [END]   success=<true|false> steps=<n> rewards=<r1,r2...rn>
 
 Usage:
-  python inference.py [--task easy|medium|hard] [--base-url http://127.0.0.1:8000]
+  python inference.py [--task easy|medium|hard] [--base-url http://127.0.0.1:7860]
 
 Environment variables (loaded from .env):
   API_BASE_URL  — LLM API base URL  (default: https://api.openai.com/v1)
