@@ -63,9 +63,7 @@ The environment is modeled as a **POMDP (Partially Observable Markov Decision Pr
 
 ## ⭐ Agent Decision Flow
 
-<img width="642" height="696" alt="image" src="https://github.com/user-attachments/assets/d74422ce-f5f1-4891-a86f-66e3b30474f4" />
 
-<img width="749" height="804" alt="image" src="https://github.com/user-attachments/assets/53c9b01d-b228-4480-b516-7762fb3f30ed" />
 
 
 
