@@ -2,36 +2,25 @@
 server/app.py
 =============
 FastAPI server that wraps DisasterTriageEnv in an OpenEnv-compliant HTTP API.
-
-Endpoints
----------
-GET  /health              → server liveness
-POST /reset               → start / restart an episode
-                            returns: { observation, done=false, info }
-POST /step                → execute one action
-                            returns: { observation, reward, done, info }
-                            reward is ONLY at the top level (not inside info)
-GET  /state               → full internal state (true values, not masked)
-GET  /explain             → optional grader diagnostic (not required by OpenEnv)
-GET  /sessions            → list active sessions
-DELETE /session/{task_id} → destroy a session
-
-Sessions are keyed by task_id ("easy" | "medium" | "hard" or any string).
+Integrated with a Gradio Console UI for real-time monitoring.
 """
 
 from __future__ import annotations
 import uvicorn
 import time
+import json
+import os
+import requests
+import gradio as gr
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Generator
 
 import numpy as np
-import gradio as gr
 from fastapi import Body, FastAPI, HTTPException, Path, Request
-from ui import demo  # Import our Gradio console
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+# Local environment imports
 from app.env import DisasterTriageEnv
 from app.models import (
     Action,
@@ -41,6 +30,13 @@ from app.models import (
     ResourceType,
 )
 
+# Agent imports for the UI
+try:
+    from inference import get_scripted_action, get_llm_action
+except Exception as e:
+    print(f"[SYSTEM] Error importing inference: {e}")
+    def get_scripted_action(obs, step, task): return {"action_type": "finalize"}
+    def get_llm_action(hist, obs, step, task): return {"action_type": "finalize"}
 
 # ---------------------------------------------------------------------------
 # Session store  (task_id → env)
@@ -48,7 +44,6 @@ from app.models import (
 
 _sessions:   Dict[str, DisasterTriageEnv] = {}
 _created_at: Dict[str, float]             = {}
-
 
 def _get_session(task_id: str) -> DisasterTriageEnv:
     if task_id not in _sessions:
@@ -61,37 +56,30 @@ def _get_session(task_id: str) -> DisasterTriageEnv:
         )
     return _sessions[task_id]
 
-
 # ---------------------------------------------------------------------------
-# Lifespan — bootstrap default sessions for each difficulty
+# Lifespan
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Bootstrap one session per difficulty — make() already calls reset(),
-    # but we call reset() again explicitly so the lifespan is self-contained
-    # even if make() changes in the future.
     for diff in ("easy", "medium", "hard"):
-        env = DisasterTriageEnv.make(diff)   # make() calls reset() internally
-        env.reset()                           # explicit reset — belt-and-suspenders
-        _sessions[diff]   = env
-        _created_at[diff] = time.time()
+        try:
+            env = DisasterTriageEnv.make(diff)
+            env.reset()
+            _sessions[diff]   = env
+            _created_at[diff] = time.time()
+        except Exception as e:
+            print(f"[WARN] Failed to bootstrap {diff}: {e}")
     yield
     _sessions.clear()
     _created_at.clear()
 
-
 # ---------------------------------------------------------------------------
-# App
+# FastAPI App Setup
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Disaster Triage RL Environment",
-    description=(
-        "OpenEnv-compliant HTTP wrapper around the DisasterTriageEnv POMDP. "
-        "An agent acts as a disaster coordinator allocating limited resources "
-        "across partially observable zones under a step budget."
-    ),
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -103,87 +91,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ---------------------------------------------------------------------------
-# Request / Response schemas
+# Pydantic Schemas
 # ---------------------------------------------------------------------------
-
-class ResetRequest(BaseModel):
-    """POST /reset — OpenEnv reset request."""
-    task_id:    str           = Field(
-        "medium",
-        description="Session identifier: 'easy' | 'medium' | 'hard' (or any custom string)",
-    )
-    difficulty: str           = Field("medium", description="easy | medium | hard")
-    seed:       Optional[int] = Field(None,     description="Optional random seed")
-
-    model_config = {"json_schema_extra": {
-        "examples": [
-            {"task_id": "easy",   "difficulty": "easy"},
-            {"task_id": "medium", "difficulty": "medium", "seed": 42},
-            {"task_id": "hard",   "difficulty": "hard",   "seed": 7},
-        ]
-    }}
-
-
-class ActionRequest(BaseModel):
-    """POST /step — agent action."""
-    task_id:       str            = Field("medium")
-    action_type:   str            = Field(..., description="request_info | allocate_resource | finalize")
-    zone_id:       Optional[str]  = Field(None, description="Zone ID: 'Z0', 'Z1', ...")
-    resource_type: Optional[str]  = Field(None, description="food | water | medicine")
-    amount:        Optional[float] = Field(None, gt=0)
-
-    model_config = {"json_schema_extra": {
-        "examples": [
-            {"task_id": "medium", "action_type": "request_info",      "zone_id": "Z2"},
-            {"task_id": "medium", "action_type": "allocate_resource",  "zone_id": "Z0",
-             "resource_type": "food", "amount": 30.0},
-            {"task_id": "medium", "action_type": "finalize"},
-        ]
-    }}
-
-
-# ---------------------------------------------------------------------------
-# OpenEnv-compliant response schemas
-# ---------------------------------------------------------------------------
-
-class ResetResponse(BaseModel):
-    """
-    OpenEnv /reset response.
-    NO reward field — reward is only meaningful after actions.
-    """
-    task_id:     str
-    observation: Dict[str, Any]
-    done:        bool = False
-    info:        Dict[str, Any]
-
-
-class StepResponse(BaseModel):
-    """
-    OpenEnv /step response.
-    reward is ONLY at the top level — never duplicated inside info.
-    Reward is clamped to [0, 1] at finalize; negative on intermediate steps.
-    """
-    task_id:     str
-    observation: Dict[str, Any]
-    reward:      float           # top-level only; clamped to [0,1] at terminal step
-    done:        bool
-    info:        Dict[str, Any]  # must NOT contain a "reward" key
-
-
-class StateResponse(BaseModel):
-    """
-    GET /state — full internal (ground-truth) state.
-    Exposes true severity + demand (not masked), unlike /observation.
-    """
-    task_id:             str
-    step_count:          int
-    max_steps:           int
-    done:                bool
-    available_resources: Dict[str, float]
-    zones:               List[Dict[str, Any]]
-
 
 class HealthResponse(BaseModel):
     status:          str
@@ -191,90 +101,57 @@ class HealthResponse(BaseModel):
     active_sessions: int
     sessions:        Dict[str, Dict[str, Any]]
 
-
-class SessionInfo(BaseModel):
+class ResetResponse(BaseModel):
     task_id:     str
-    difficulty:  str
-    done:        bool
-    step_count:  int
-    age_seconds: float
+    observation: Dict[str, Any]
+    done:        bool = False
+    info:        Dict[str, Any]
 
+class StepResponse(BaseModel):
+    task_id:     str
+    observation: Dict[str, Any]
+    reward:      float
+    done:        bool
+    info:        Dict[str, Any]
+
+class ActionRequest(BaseModel):
+    task_id:       str            = Field("medium")
+    action_type:   str            = Field(..., description="request_info | allocate_resource | finalize")
+    zone_id:       Optional[str]  = Field(None)
+    resource_type: Optional[str]  = Field(None)
+    amount:        Optional[float] = Field(None)
 
 # ---------------------------------------------------------------------------
-# Helper — parse Action from ActionRequest
+# Helper Logic
 # ---------------------------------------------------------------------------
 
 def _parse_action(req: ActionRequest) -> Action:
-    try:
-        action_type = ActionType(req.action_type)
-    except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Unknown action_type '{req.action_type}'. "
-                "Must be one of: request_info, allocate_resource, finalize."
-            ),
-        )
-
-    resource_type: Optional[ResourceType] = None
-    if req.resource_type is not None:
-        try:
-            resource_type = ResourceType(req.resource_type)
-        except ValueError:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Unknown resource_type '{req.resource_type}'. "
-                    "Must be one of: food, water, medicine."
-                ),
-            )
-
+    action_type = ActionType(req.action_type)
+    resource_type = ResourceType(req.resource_type) if req.resource_type else None
     action = Action(
         action_type=action_type,
         zone_id=req.zone_id,
         resource_type=resource_type,
         amount=req.amount,
     )
-
-    valid, err = action.validate()
-    if not valid:
-        raise HTTPException(status_code=422, detail=f"Invalid action: {err}")
-
     return action
 
-
-def _strip_reward_from_info(info: dict) -> dict:
-    """Ensure 'reward' never leaks into the info dict (OpenEnv compliance)."""
-    return {k: v for k, v in info.items() if k != "reward"}
-
-
 def _clamp_reward(reward: float) -> float:
-    """Clamp terminal reward strictly between (0, 1) for compliance."""
-    return round(float(np.clip(reward, 0.01, 0.99)), 3)
-
+    return round(float(np.clip(reward, 0.01, 0.99)), 4)
 
 # ---------------------------------------------------------------------------
-# Routes
+# API Routes
 # ---------------------------------------------------------------------------
 
-@app.get(
-    "/health",
-    response_model=HealthResponse,
-    summary="Server liveness check",
-    tags=["System"],
-)
-async def health() -> HealthResponse:
-    """Returns server status and a summary of all active sessions."""
-    session_info = {}
-    for tid, env in _sessions.items():
-        session_info[tid] = {
-            "difficulty":  env.difficulty.value,
-            "done":        env.done,
-            "step_count":  env.step_count,
-            "num_zones":   env.config.num_zones,
+@app.get("/health", response_model=HealthResponse, tags=["System"])
+async def health():
+    session_info = {
+        tid: {
+            "difficulty": env.difficulty.value,
+            "step_count": env.step_count,
             "age_seconds": round(time.time() - _created_at.get(tid, 0), 1),
-        }
-
+        } for tid, env in _sessions.items()
+    }
     return HealthResponse(
         status="ok",
         version="1.0.0",
@@ -282,200 +159,102 @@ async def health() -> HealthResponse:
         sessions=session_info,
     )
 
-
-@app.post(
-    "/reset",
-    response_model=ResetResponse,
-    summary="Reset (or create) an environment session",
-    tags=["Environment"],
-)
-async def reset(request: Request) -> ResetResponse:
-    """
-    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
-    Handles missing or empty bodies by defaulting to 'easy'.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    task_id    = body.get("task_id", "easy")
-    difficulty = body.get("difficulty", task_id)
-    seed       = body.get("seed")
-
-    try:
-        diff_enum = Difficulty(str(difficulty).lower())
-    except (ValueError, AttributeError):
-        diff_enum = Difficulty.EASY
-
-    env = DisasterTriageEnv(difficulty=diff_enum, seed=seed)
-    obs = env.reset(seed=seed)
-
-    _sessions[task_id]   = env
+@app.post("/reset", response_model=ResetResponse, tags=["Environment"])
+async def reset(request: Request):
+    try: body = await request.json()
+    except: body = {}
+    
+    task_id = body.get("task_id", "easy")
+    diff_enum = Difficulty(str(body.get("difficulty", task_id)).lower())
+    
+    env = DisasterTriageEnv(difficulty=diff_enum)
+    obs = env.reset()
+    _sessions[task_id] = env
     _created_at[task_id] = time.time()
-
+    
     return ResetResponse(
-        task_id=task_id,
-        observation=obs.to_dict(),
-        done=False,
-        info={
-            "message":    "Environment reset successfully.",
-            "task_id":    task_id,
-            "difficulty": diff_enum.value,
-            "seed":       seed,
-        },
+        task_id=task_id, 
+        observation=obs.to_dict(), 
+        info={"message": "Reset OK"}
     )
 
-
-@app.post(
-    "/step",
-    response_model=StepResponse,
-    summary="Execute one action in the environment",
-    tags=["Environment"],
-)
-async def step(request: Request) -> StepResponse:
-    """
-    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
+@app.post("/step", response_model=StepResponse, tags=["Environment"])
+async def step(request: Request):
+    try: body = await request.json()
+    except: body = {}
+    
     task_id = body.get("task_id", "easy")
-    env     = _get_session(task_id)
-
-    # Use default action if body is missing/empty
-    try:
-        req = ActionRequest(**body)
-    except Exception:
-        req = ActionRequest(task_id=task_id, action_type="request_info", zone_id="Z0")
-
+    env = _get_session(task_id)
+    
+    req = ActionRequest(**body)
     action = _parse_action(req)
     obs, reward, done, info = env.step(action)
-
-    # All rewards (including intermediate) must be strictly in (0, 1)
-    final_reward = _clamp_reward(reward)
-    clean_info   = _strip_reward_from_info(info)
-
+    
     return StepResponse(
         task_id=task_id,
         observation=obs.to_dict(),
-        reward=final_reward,
+        reward=_clamp_reward(reward),
         done=done,
-        info=clean_info,
+        info=info
     )
 
+# ---------------------------------------------------------------------------
+# Gradio UI Integration
+# ---------------------------------------------------------------------------
 
-@app.get(
-    "/state",
-    response_model=StateResponse,
-    summary="Full internal ground-truth state (not masked)",
-    tags=["Environment"],
-)
-async def state(task_id: str = "medium") -> StateResponse:
-    """
-    Returns the **full internal state** of the environment — including
-    true severity and demand for every zone (not hidden/masked).
+def run_ui_simulation(task: str) -> Generator:
+    """Internal UI simulation logic that talks to the local API."""
+    port = os.getenv("PORT", "7860")
+    base_url = f"http://127.0.0.1:{port}"
+    logs = [f"> Initializing simulation: {task.upper()}"]
+    yield "\n".join(logs)
+    
+    try:
+        # Reset
+        resp = requests.post(f"{base_url}/reset", json={"task_id": "ui_session", "difficulty": task})
+        data = resp.json()
+        obs = data.get("observation", {})
+        done = False
+        step = 0
+        total_reward = 0
+        logs.append(f"> Triage Engine Ready | Connected to Port {port}")
+        yield "\n".join(logs)
 
-    This is NOT the agent's observation. Use `/step` response for that.
+        while not done:
+            step += 1
+            action = get_llm_action([], obs, step, task)
+            
+            resp = requests.post(f"{base_url}/step", json={"task_id": "ui_session", **action})
+            res = resp.json()
+            obs = res.get("observation", {})
+            reward = res.get("reward", 0.0)
+            done = res.get("done", False)
+            total_reward += reward
 
-    Fields returned per zone:
-    - `zone_id`, `true_severity`, `true_demand`
-    - `allocated` (resources deployed so far)
-    - `urgency_signal` (noisy float 0–1, always visible)
-    - `revealed` (whether the agent has called request_info)
-    - `known_severity` (-1 if not revealed)
-    - `known_demand` (null if not revealed)
-    """
-    env = _get_session(task_id)
+            logs.append(f"step={step} action={json.dumps(action)} reward={reward:.4f} done={str(done).lower()}")
+            yield "\n".join(logs)
+            time.sleep(1.0)
 
-    # Delegate to env.get_full_state() which explicitly iterates self.zones
-    # and pulls true_severity + true_demand for every zone.
-    full = env.get_full_state()
+        logs.append(f"\n[END] MISSION COMPLETE | score={total_reward:.3f}")
+        yield "\n".join(logs)
+    except Exception as e:
+        yield f"\nERROR: {str(e)}"
 
-    return StateResponse(
-        task_id=task_id,
-        step_count=full["step_count"],
-        max_steps=full["max_steps"],
-        done=full["done"],
-        available_resources=full["available_resources"],
-        zones=full["zones"],
-    )
+with gr.Blocks(title="Disaster Triage Console", theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate")) as demo:
+    gr.Markdown("# 🚑 Disaster Triage Console")
+    gr.Markdown("Real-time monitoring of the Triage Engine.")
+    with gr.Row():
+        task_input = gr.Dropdown(["easy", "medium", "hard"], value="medium", label="Task")
+        start_btn = gr.Button("🚀 Start Mission", variant="primary")
+    log_output = gr.Textbox(label="Logs", lines=20, autoscroll=True)
+    start_btn.click(run_ui_simulation, inputs=[task_input], outputs=[log_output])
 
-
-@app.get(
-    "/explain",
-    summary="[Optional] Grader breakdown of the current allocation",
-    tags=["Diagnostic"],
-)
-async def explain(task_id: str = "medium") -> Dict[str, Any]:
-    """
-    **Optional diagnostic — not required by OpenEnv.**
-
-    Returns a per-zone grader breakdown showing how the current allocation
-    would score across the three axes (prioritization, efficiency, utilization).
-
-    Safe to ignore; does not advance the environment.
-    """
-    env = _get_session(task_id)
-    report = env.grader.explain(
-        zones=env.zones,
-        initial_resources=env._initial_resources,
-        available_resources=env.available_resources,
-    )
-    return {
-        "task_id":    task_id,
-        "step_count": env.step_count,
-        "note":       "Diagnostic only — not part of OpenEnv spec.",
-        **report,
-    }
-
-
-@app.get(
-    "/sessions",
-    summary="List all active sessions",
-    tags=["System"],
-)
-async def list_sessions() -> Dict[str, Any]:
-    """Lists all task_ids currently tracked by the server."""
-    return {
-        "active_sessions": len(_sessions),
-        "sessions": [
-            SessionInfo(
-                task_id=tid,
-                difficulty=env.difficulty.value,
-                done=env.done,
-                step_count=env.step_count,
-                age_seconds=round(time.time() - _created_at.get(tid, 0), 1),
-            ).model_dump()
-            for tid, env in _sessions.items()
-        ],
-    }
-
-
-@app.delete(
-    "/session/{task_id}",
-    summary="Destroy a session",
-    tags=["System"],
-)
-async def delete_session(
-    task_id: str = Path(..., description="Session to delete"),
-) -> Dict[str, str]:
-    """Removes the session from the store and frees memory."""
-    if task_id in ("easy", "medium", "hard"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot delete built-in session '{task_id}'.",
-        )
-    if task_id not in _sessions:
-        raise HTTPException(status_code=404, detail=f"Session '{task_id}' not found.")
-    del _sessions[task_id]
-    _created_at.pop(task_id, None)
-    return {"message": f"Session '{task_id}' deleted."}
+# ---------------------------------------------------------------------------
+# Entry Point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Unified launch: FastAPI + Gradio
     port = int(os.getenv("PORT", "7860"))
-    app = gr.mount_gradio_app(app, demo, path="/") # Mount UI at root
+    # Mount the UI BEFORE launching uvicorn
+    app = gr.mount_gradio_app(app, demo, path="/")
     uvicorn.run(app, host="0.0.0.0", port=port)

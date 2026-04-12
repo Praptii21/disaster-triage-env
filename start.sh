@@ -13,8 +13,7 @@ while ! curl -s http://127.0.0.1:${PORT:-7860}/health > /dev/null; do
 done
 echo "Unified Server is UP!"
 
-# 3. Run the initial baseline inference (Background)
-# This will log the mission results to the HF console.
+# 3. Run the initial baseline mission (Background)
 echo "Running baseline mission..."
 python inference.py &
 
