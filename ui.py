@@ -13,9 +13,8 @@ except Exception as e:
     def get_scripted_action(obs, step, task): return {"action_type": "finalize"}
     def get_llm_action(hist, obs, step, task): return {"action_type": "finalize"}
 
-# Backend Configuration
-# Use internal port 8000 for backend communication on HF
-_PORT = os.getenv("BACKEND_PORT", "8000")
+# Backend Configuration (Unified port 7860)
+_PORT = os.getenv("PORT", "7860")
 API_BASE_URL = f"http://127.0.0.1:{_PORT}"
 
 def run_simulation(task: str) -> Generator:
@@ -37,7 +36,7 @@ def run_simulation(task: str) -> Generator:
         step = 0
         total_reward = 0
         
-        logs.append(f"> Connected to backend at {API_BASE_URL}")
+        logs.append(f"> Triage Engine Initialized | Localhost Connection Established")
         yield "\n".join(logs)
 
         # 2. Loop
@@ -105,11 +104,6 @@ with gr.Blocks(title="Disaster Triage Console", theme=gr.themes.Soft(primary_hue
     )
 
 if __name__ == "__main__":
-    # HF_PORT is usually 7860
-    hf_port = int(os.getenv("PORT", "7860"))
-    print(f"Starting Console on port {hf_port}")
-    demo.launch(
-        server_name="0.0.0.0", 
-        server_port=hf_port,
-        theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate")
-    )
+    # Local dev mode
+    print(f"Starting Standalone Console on port 7861")
+    demo.launch(server_name="127.0.0.1", server_port=7861)

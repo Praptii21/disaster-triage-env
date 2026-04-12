@@ -26,7 +26,9 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import gradio as gr
 from fastapi import Body, FastAPI, HTTPException, Path, Request
+from ui import demo  # Import our Gradio console
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -472,10 +474,8 @@ async def delete_session(
     _created_at.pop(task_id, None)
     return {"message": f"Session '{task_id}' deleted."}
 
-import uvicorn
-
-def main():
-    uvicorn.run("server.app:app", host="0.0.0.0", port=7860, reload=False)
-
 if __name__ == "__main__":
-    main()
+    # Unified launch: FastAPI + Gradio
+    port = int(os.getenv("PORT", "7860"))
+    app = gr.mount_gradio_app(app, demo, path="/") # Mount UI at root
+    uvicorn.run(app, host="0.0.0.0", port=port)
