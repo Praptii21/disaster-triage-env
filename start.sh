@@ -1,25 +1,29 @@
 #!/bin/bash
 # start.sh
+# Optimized for Hugging Face Spaces
 
-# 1. Start the FastAPI server in the background on an internal port
-echo "Starting FastAPI server on port 8000..."
-uvicorn server.app:app --host 0.0.0.0 --port 8000 &
+# Hugging Face usually provides the PORT via variable, defaulting to 7860
+PORT_NUM=${PORT:-7860}
 
-# 2. Wait for the server to be ready
-echo "Waiting for server to start..."
-while ! curl -s http://127.0.0.1:8000/health > /dev/null; do
-  sleep 1
+echo "Starting FastAPI server on port $PORT_NUM..."
+# Start the server in the background
+uvicorn server.app:app --host 0.0.0.0 --port $PORT_NUM &
+SERVER_PID=$!
+
+echo "Waiting for server to be healthy..."
+for i in $(seq 1 30); do
+  if curl -sf http://127.0.0.1:$PORT_NUM/health > /dev/null; then
+    echo "Server is UP!"
+    break
+  fi
+  echo "Retry $i/30: waiting for health check..."
+  sleep 2
 done
-echo "Backend Server is UP!"
 
-# 3. Start the Gradio Console UI on the public port (Background)
-# Occupying port 7860 immediately prevents HF timeouts.
-echo "Starting Gradio Console on public port ${PORT:-7860}..."
-python ui.py &
+echo "Running environment inference..."
+# Explicitly point to the local port
+python inference.py --base-url http://127.0.0.1:$PORT_NUM
 
-# 4. Run the initial baseline inference (Background)
-echo "Running baseline inference..."
-python inference.py &
-
-# 5. Keep the container alive
-wait
+echo "Inference routine complete. Keeping server alive for logs."
+# Keeps the container 'Running' as long as the uvicorn server is alive
+wait $SERVER_PID
