@@ -140,36 +140,90 @@ At each step, the agent receives:
 
 ---
 
-## 💰 Reward Design
-The reward function is structured to discourage guessing and encourage precise, high-impact decisions:
+---
 
-### Step-wise Signals
-- Small positive rewards for meaningful actions (information gain, correct allocation)
-- Implicit cost of time via limited step budget
+## 💰 Reward & Grader System
 
-### Terminal Reward
-- Final score computed using a deterministic multi-axis grader
-- Normalized to (0.01 – 0.99) for OpenEnv compliance
+This environment utilizes a deterministic, multi-axis evaluation system designed to strictly penalize pattern matching and reward strategic, resource-aware decision-making.
+
+### 1. Reward System Overview
+
+| Component | Type | Purpose |
+| :--- | :--- | :--- |
+| **Step rewards** | Dense | Provides intermediate feedback on information gain and allocation quality. |
+| **Action Costs** | Sparse | Implicitly penalizes dithering and inefficient pathing via the step budget. |
+| **Final Reward** | Terminal | The "Ground Truth" score produced by the 3-axis deterministic grader. |
+
+### 2. Step-Level Reward Matrix
+
+| Action | Reward Range | Strategic Purpose |
+| :--- | :--- | :--- |
+| `request_info` | `+0.02` | Rewards active exploration and uncertainty reduction. |
+| `allocate_resource`| `+0.05` | Rewards high-impact allocation (Severity ≥ 4). |
+| `step_increment` | `-0.005` | Implicit penalty for every action taken, enforcing efficiency. |
+
+> [!TIP]
+> **Reward Engineering**: These signals are balanced to ensure that "blindly" allocating (without info) or "spamming" info requests result in a lower aggregate score than focused, informed execution.
+
+### 3. Final Grader Formula
+
+The terminal evaluation is computed using the following weighted objective function:
+
+```math
+Final Score = (0.35 × Prioritization) + (0.40 × Efficiency) + (0.25 × Utilization)
+```
+
+- **Safety Guard**: Final scores are strictly bounded to `[0.01, 0.99]` for OpenEnv compliance.
+- **Reproducibility**: Evaluation is stateless and purely deterministic (Fixed Input → Fixed Output).
+
+### 4. Grader Components (The 3 Axes)
+
+| Metric | Weight | Description | Behavior Encouraged |
+| :--- | :--- | :--- | :--- |
+| **Prioritization** | 35% | Evaluates if critical zones (Severity 4-5) were served first. | Severity-Aware Triage |
+| **Efficiency** | 40% | Measures demand satisfaction accuracy per resource type. | High-Precision Logistics |
+| **Utilization** | 25% | Penalizes resource waste and excessive over-allocation. | Stewardship under Scarcity |
+
+### 5. Mathematical Definitions
+
+#### A. Severity-Weighted Prioritization
+To simulate high-stakes triage, zone importance is scaled exponentially:
+```math
+Zone Weight = 2 ^ {true\_severity}
+```
+*Effect: A Severity 5 zone is **16x more important** than a Severity 1 zone, forcing the agent to ignore low-priority background noise.*
+
+#### B. Allocation Efficiency
+Measures the ratio of useful allocation vs. the total environmental demand:
+```math
+Efficiency = \frac{\sum \min(allocated, demand)}{\sum demand}
+```
+
+#### C. Resource Utilization (Waste Management)
+Stewardship is measured by minimizing useless "Waste" (allocation exceeding demand):
+```math
+Waste = \sum \max(allocated - demand, 0)
+```
+```math
+Utilization = 1 - \left( \frac{Waste}{Total Allocated} \right)
+```
+
+### 6. Key Properties of the Grader
+
+- **Un-gameable**: Final evaluation uses true "Hidden" values that the agent never sees directly.
+- **Randomness Recovery**: Blind guessing or random allocation distributions yield scores below `0.15`.
+- **Sustainability**: Heavy over-allocation (e.g., dumping all food on one zone) causes the **Utilization** score to collapse, capping the total reward.
+- **Dominance**: High-severity zones dominate the weighted average; ignoring a Severity 5 zone makes a score > 0.6 impossible.
 
 ---
 
-## 📊 Grader Design (Deterministic)
-The final score is a weighted combination of three axes:
+## 🚀 Why This Grader is Different
 
-**Final Score = (0.35 × Prioritization) + (0.40 × Efficiency) + (0.25 × Utilization)**
+Traditional RL benchmarks (Atari, Gym) typically optimize for a single scalar reward. The Disaster Triage environment introduces **Resource-Constrained Optimization** through three competing metrics:
 
-1.  **Prioritization (35%)**
-    - Rewards serving high-severity zones first
-    - Uses severity-weighted scaling (e.g., 2^severity)
-    - Ensures critical zones contribute disproportionately more
-2.  **Efficiency (40%)**
-    - Measures how accurately the agent matches actual demand
-    - Penalizes under-allocation and missed needs
-3.  **Utilization (25%)**
-    - Penalizes over-allocation and wasted resources
-    - Encourages optimal use of limited supply
-
-👉 **Key Property:** High scores are only achievable through correct prioritization + precise allocation + minimal waste
+1.  **Multi-Objective Optimization**: Agents must balance meeting demand (Efficiency) against not overspending (Stewardship).
+2.  **Strategic Reasoning**: Because actions are irreversible, the agent must commit to a plan based on its revealed knowledge.
+3.  **Real-World Modeling**: By using severity-weighted scoring, we simulate the ethical and operational realities of a Disaster Response Coordinator.
 
 ---
 
