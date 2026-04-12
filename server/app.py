@@ -281,8 +281,8 @@ with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
         gr.HTML("""
         <div id="title-block">
             <h1> DISASTER TRIAGE ENV</h1>
-            <p>Dynamic Resource Orchestration & Logistics Optimization Benchmark</p>
-            <p>Strategic multi-objective allocation of food, water, and medicine under partial observability.</p>
+            <p>Dynamic Resource Orchestration & Logistics Optimization Benchmark , Sstrategic multi-objective allocation of food, water, and medicine under partial observability.</p>
+           
         </div>
         """)
 
