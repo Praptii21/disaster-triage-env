@@ -192,7 +192,7 @@ def run_simulation(task: str) -> Generator:
             yield "\n".join(logs); return
         
         data = resp.json(); obs = data.get("observation", {}); done = data.get("done", False)
-        history = []; step = 0; rewards_list = []
+        history = []; step_n = 0; rewards_list = []
         model = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
         
         # [START] task=<task_name> env=disaster-triage-env model=<model_name>
@@ -200,11 +200,11 @@ def run_simulation(task: str) -> Generator:
         yield "\n".join(logs)
 
         while not done:
-            step += 1
-            try: action = get_llm_action(history, obs, step, task)
+            step_n += 1
+            try: action = get_llm_action(history, obs, step_n, task)
             except Exception as e:
                 logs.append(f"AGENT_WARN: {str(e)[:50]}... Falling back to scripted.")
-                action = get_scripted_action(obs, step, task)
+                action = get_scripted_action(obs, step_n, task)
 
             resp = requests.post(f"{base_url}/step", json={"task_id": "dashboard", **action})
             if resp.status_code != 200:
@@ -216,14 +216,14 @@ def run_simulation(task: str) -> Generator:
             
             # [STEP] step=N action={...} reward=0.0000 done=false error=null
             action_json = json.dumps(action, separators=(',', ':'))
-            logs.append(f"[STEP] step={step} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null")
+            logs.append(f"[STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null")
             yield "\n".join(logs)
             time.sleep(1.0)
 
         # [END] success=true steps=12 score=0.337 rewards=0.04,0.03...
         mission_score = rewards_list[-1] if rewards_list else 0.001
         rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
-        logs.append(f"[END] success={str(done).lower()} steps={step} score={mission_score:.3f} rewards={rewards_str}")
+        logs.append(f"[END] success={str(done).lower()} steps={step_n} score={mission_score:.3f} rewards={rewards_str}")
         yield "\n".join(logs)
     except Exception as e:
         logs.append(f"fatal_error: {str(e)}"); yield "\n".join(logs)
