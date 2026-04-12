@@ -255,12 +255,7 @@ def _clamp_reward(reward: float) -> float:
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get(
-    "/health",
-    response_model=HealthResponse,
-    summary="Server liveness check",
-    tags=["System"],
-)
+
 async def health() -> HealthResponse:
     """Returns server status and a summary of all active sessions."""
     session_info = {}
