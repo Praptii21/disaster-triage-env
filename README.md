@@ -234,6 +234,11 @@ Traditional RL benchmarks (Atari, Gym) typically optimize for a single scalar re
 ---
 
 ## 🤖 Baseline Agent (`inference.py`)
+
+<img width="600" height="900" alt="_- visual selection" src="https://github.com/user-attachments/assets/b65a6a3e-183f-4b62-b0d4-933a99b27d14" />
+
+
+
 The baseline agent simulates an LLM-driven disaster response coordinator:
 - Executes a full agent loop using `/reset` and `/step`
 - Interprets observations into structured decision context
