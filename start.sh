@@ -1,21 +1,25 @@
 #!/bin/bash
 # start.sh
 
-# 1. Start the Unified Server (FastAPI + Gradio)
-# HF will provide the PORT env var (7860)
-echo "Starting Unified Triage Server on port ${PORT:-7860}..."
-PYTHONPATH=. python server/main.py &
+# 1. Start the FastAPI server in the background on an internal port
+echo "Starting FastAPI server on port 8000..."
+uvicorn server.app:app --host 0.0.0.0 --port 8000 &
 
 # 2. Wait for the server to be ready
-echo "Waiting for unified server to start..."
-while ! curl -s http://127.0.0.1:${PORT:-7860}/health > /dev/null; do
+echo "Waiting for server to start..."
+while ! curl -s http://127.0.0.1:8000/health > /dev/null; do
   sleep 1
 done
-echo "Unified Server is UP!"
+echo "Backend Server is UP!"
 
-# 3. Run the initial baseline mission (Background)
-echo "Running baseline mission..."
+# 3. Start the Gradio Console UI on the public port (Background)
+# Occupying port 7860 immediately prevents HF timeouts.
+echo "Starting Gradio Console on public port ${PORT:-7860}..."
+python ui.py &
+
+# 4. Run the initial baseline inference (Background)
+echo "Running baseline inference..."
 python inference.py &
 
-# 4. Keep the container alive
+# 5. Keep the container alive
 wait
