@@ -175,9 +175,11 @@ def run_simulation(task: str) -> Generator:
         logs.append("─" * 60)
         mission_score = rewards_list[-1] if rewards_list else 0.001
         rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
+        total = sum(rewards_list)
         status = "✔ MISSION SUCCESS" if done else "✗ MISSION INCOMPLETE"
         logs.append(f"{status}")
         logs.append(f"[END] success={str(done).lower()} steps={step_n} score={mission_score:.3f} rewards={rewards_str}")
+        logs.append(f"  Total reward collected: {total:.3f}")
         yield "\n".join(logs)
 
     except Exception as e:
@@ -245,11 +247,11 @@ textarea {
 footer { display: none !important; }
 """
 
-with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
+with gr.Blocks(css=CSS, title="DISASTER TRIAGE ENV // COMMAND") as demo:
     gr.HTML("""
     <div style="border-left: 3px solid #ff4444; padding-left: 1.2rem; margin-bottom: 2rem;">
         <h1 style="font-family: Syne, sans-serif; font-size: 2rem; font-weight: 800; color: #ffffff; letter-spacing: -0.02em; margin: 0 0 0.3rem 0;">
-            DISASTER TRIAGE
+            <strong> DISASTER TRIAGE ENV</strong>
         </h1>
         <p style="color: #64748b; font-size: 0.85rem; font-style: italic; margin-top: 0.5rem; line-height: 1.4;">
             Strategic multi-objective allocation of food, water, and medicine under partial observability.
@@ -277,14 +279,4 @@ with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
         placeholder="Awaiting deployment order...",
     )
 
-    gr.Markdown("<p style='color:#4a5568; font-size:0.7rem; margin-top:8px; font-family:monospace;'>Logs follow OpenEnv format &nbsp;·&nbsp; [START] → [STEP] × N → [END] &nbsp;·&nbsp; 🍱 Food &nbsp; 💧 Water &nbsp; 🧪 Medicine</p>")
-
     start_btn.click(fn=run_simulation, inputs=[task_input], outputs=[log_output])
-
-app = gr.mount_gradio_app(app, demo, path="/")
-
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=7860)
-
-if __name__ == "__main__":
-    main()
