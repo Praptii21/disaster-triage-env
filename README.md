@@ -1,156 +1,163 @@
----
-title: "DeadCore: Disaster Triage Benchmark (DTB)"
-emoji: 🚨
-colorFrom: red
-colorTo: gray
-sdk: docker
-app_port: 7860
-license: mit
-tags:
-  - openenv
-  - deadcore
-  - ai-benchmark
-  - pomdp
-  - safety-critical
-  - disaster-response
-short_description: Deterministic evaluation of AI decision-making in disasters.
----
+# 🚨 Disaster Triage Environment (DTE)
 
-# Disaster Triage Benchmark (DTB)
-**A Deterministic Evaluation Framework for Safety-Critical Resource Allocation**
-
-> [!NOTE]
-> This repository contains the Phase 2 submission for the **Meta × HuggingFace OpenEnv Challenge 2026**.  
-> **DTB** is a zero-LLM deterministic benchmark evaluating autonomic AI agents in high-stakes triage scenarios.
+An OpenEnv-compliant reinforcement learning benchmark for evaluating agentic decision-making in resource-constrained disaster logistics.
 
 ---
 
-## 🔬 Motivation: The Cost of Information
-Autonomous systems operating in real-world disaster scenarios face a fundamental trade-off: **Information Acquisition vs. Immediate Action**. In emergency response, every second spent gathering data is a second subtracted from life-saving deployment. 
+## 🔹 Problem Statement
+In the immediate aftermath of a disaster, responders are faced with a chaotic "Fog of War." Resources are finite, timelines are compressed, and information is often missing or noisy. This is not just a pattern recognition task—it is **high-stakes decision-making under severe constraints.**
 
-Existing RL benchmarks (Atari, MuJoCo) often provide agents with perfect or free state observations. **DTB** fills this research gap by treating **Observation as a Costly Resource**. It evaluates an agent's ability to minimize uncertainty while maximizing impact across a multi-zone environment under a strict temporal budget.
+Existing RL benchmarks (like Atari or MuJoCo) focus on motor control or games. Our environment fills the gap by modeling **Operational Triage**, where the cost of a wrong move is measured in system-wide failure and misallocated survival resources.
 
----
-
-## 🏗️ Environment Architecture
-
-DeadCore DTB is structured as a **Partially Observable Markov Decision Process (POMDP)**.
-
-### Agent Objectives
-The AI agent operates as a **Response Commander**, tasked with distributing discrete resource bundles (Food, Water, Medicine) across $N$ disaster zones with varying severity [1-5].
-
-### Core Constraints
-- **Scarcity**: Initial resources are insufficient to meet 100% of global demand; the agent must prioritize.
-- **Observability**: Zones are "Hidden" by default. Agents must expend a budget-step to `request_info`.
-- **Temporal Budget**: Episodes terminate at $T$ steps, forcing the agent to balance exploration and execution.
+👉 *“This is not just detection — it is decision-making under constraints.”*
 
 ---
 
-## 📊 Evaluation Tiers
+## ⭐ Why This Benchmark Matters
+Most RL environments focus on games or static reasoning tasks. This environment evaluates **sequential decision-making under uncertainty**, where:
+- Information is incomplete (Partial Observability)
+- Resources are limited (Finite Stockpiles)
+- Decisions are irreversible (Resource Consumption)
+- Time is constrained (Hard Step Budgets)
 
-The benchmark rotates through three task scenarios of increasing complexity:
+It provides a realistic testbed for evaluating AI agents in operational domains such as:
+- **Disaster Response**
+- **Supply Chain Logistics**
+- **Crisis Management**
 
-| Tier | Task ID | Complexity | Observability | Reasoning Axis |
-| :--- | :--- | :--- | :--- | :--- |
-| **Easy** | `easy` | 3 Zones | Full | **Execution Speed**: Strategic allocation pattern under full visibility. |
-| **Medium** | `medium` | 5 Zones | Partial | **Uncertainty Management**: Balancing intel gathering with partial data. |
-| **Hard** | `hard` | 7 Zones | Hidden | **Risk Mitigation**: Prioritizing high-severity detection under extreme scarcity. |
-
----
-
-## ⚖️ Deterministic Grading Engine
-All grading is performed via **DeadCore's Zero-LLM Evaluation Engine**, ensuring absolute reproducibility and fairness. Performance is quantified across three primary axes (75% of final reward):
-
-1. **Prioritization Accuracy (50%)**: Measures the degree to which high-severity zones received priority over low-severity ones.
-2. **Allocation Efficiency (30%)**: Normalized MAE between allocated resources and true ground-truth demand.
-3. **Resource Utilization (20%)**: Assesses the conversion rate of available resources into productive impact vs. over-allocation waste.
+This makes it a benchmark for **Agentic AI**, not just predictive models.
 
 ---
 
-## ⚡ Dense Reward System & Anti-Hacking
-To support robust agent learning, DeadCore DTB provides a continuous, step-wise reward signal $r_t \in [0, 1]$.
-
-| Signal Type | Condition | Reward ($r_t$) | Positioning |
-| :--- | :--- | :--- | :--- |
-| **Strategic Discovery** | Revealed Severity 4-5 Zone | 0.04 | Rewards high-intel discovery. |
-| **Perfect Match** | Medicine → Severity 5 Zone | 0.10 | Penalizes priority inversion. |
-| **Redundant Intel** | Repeated Info Request | 0.005 | Discourages budget-wasting loops. |
-| **Over-Allocation** | Allocation > 110% Demand | -0.005 | Prevents "dumping" heuristic. |
-
-**Final Reward Blending:** The terminal signal is a composite of $75\%$ Grader Score and $25\%$ Step Quality. This design **prevents reward hacking**—an agent cannot achieve a high score through luck or "lazy" finalization; it must demonstrate consistent reasoning at every step.
+## ⭐ Design Principles
+- **Determinism**: All rewards and transitions are 100% reproducible given the same seed.
+- **Bounded Scoring**: Final rewards are strictly in **(0.01, 0.99)** to comply with OpenEnv validation and avoid degenerate extremes.
+- **Efficiency Pressure**: Limited action horizons (7/10/13 steps) enforce meaningful, high-impact decisions.
+- **No Reward Hacking**: Over-allocation, "action spamming," and random guessing are heavily penalized through the prioritization and utilization axes.
+- **Exploration Cost**: Information gathering (`request_info`) has explicit trade-offs and temporal costs.
 
 ---
 
-## ⚡ Reward Logic Summary
-The DeadCore DTB utilizes a **dense, step-wise reward signal** to ensure consistent learning gradients:
-- **High-Impact Discovery**: +0.04 for identifying severity 4-5 zones (prioritizing critical risk).
-- **Resource Match**: +0.10 for perfect sector/resource alignment (e.g., Medicine for S5).
-- **Exploration Signal**: +0.02 for new zone discovery; +0.005 for repeat requests (minimal signal).
-- **Sustainability Penalty**: -0.005 for over-allocation beyond 110% of true demand.
+## 🔹 Solution Overview
+The environment is modeled as a **POMDP (Partially Observable Markov Decision Process)** simulating a lead disaster architect coordinating multiple zones.
+- **Zones**: Multiple crisis areas with unique, hidden severity and resource demands.
+- **Resources**: Fixed global stockpiles of **Food, Water, and Medicine**.
+- **Metrics**: Agents must balance noise-filtered signals (`urgency_signal`) against the cost of ground-truth reconnaissance.
 
 ---
 
-## 🔌 API Endpoints
-The environment server exposes a standard REST interface on Port 7860:
-- `POST /reset`: Initialize new episode (requires `task_id`).
-- `POST /step`: Dispatch agent action; returns observation, reward, and done flags.
-- `GET /tasks`: Retrieve supported difficulty levels.
-- `GET /state`: Diagnostic endpoint for ground-truth inspection.
-- `GET /health`: Liveness probe for monitoring.
+## ⭐ Agent Decision Flow
+A high-performing agent follows a distinct cognitive cycle:
+**Observe** → **Prioritize** → **Request Info (Explore)** → **Allocate Resources (Exploit)** → **Finalize**
 
 ---
 
-## 📊 Baseline Performance Log Sample
-Evaluation utilizes the OpenEnv standard `[START]`, `[STEP]`, and `[END]` protocol for automated parsing.
+## 🔹 Key Features
+- **Partial Observability**: Ground-truth demand is hidden behind the `request_info` action.
+- **Resource Constraints**: Total budget for food/water/medicine is shared across all zones.
+- **Temporal Decay**: Rewards diminish every step, simulating the increasing urgency of a real-life crisis.
+- **Multi-Axis Grader**: Performance is judged on prioritization, demand fulfillment, and resource stewardship.
 
+---
+
+## 🔹 Tasks & Difficulty Levels
+| Difficulty | Description | Budget | Observability |
+| :--- | :--- | :---: | :--- |
+| **Easy** | 3 Zones. Fully observable, deterministic allocation tasks. | 7 Steps | Full Visibility |
+| **Medium** | 5 Zones. Partial observability, selective exploration required. | 10 Steps | ~50% Revealed |
+| **Hard** | 7 Zones. High uncertainty + tight budget + prioritization critical. | 13 Steps | Fully Hidden |
+
+---
+
+## 🔹 Environment Design
+
+### 🎮 Actions
+- `request_info`: Reveal zone-level severity and demand (Cost: -0.01 reward).
+- `allocate_resource`: Dispatch specific volume of a resource (Cost: -0.02 reward).
+- `finalize`: Termination command to trigger the final grader.
+
+### 👁️ Observations
+- `zones`: Array containing `urgency_signal`, `revealed`, and (if revealed) `known_severity` and `known_demand`.
+- `available_resources`: Current stockpiles of Food, Water, and Medicine.
+- `step_count` / `max_steps`: Current action budget progress.
+- `data_completeness`: Ratio of environmental knowledge vs. the unknown.
+
+### 💰 Rewards
+- **Step-wise Rewards**: Encourages finding new info (+0.05) and correct demand filling (+0.10).
+- **Final Reward**: A blended score from the 3-axis Grader, scaled by difficulty.
+
+---
+
+## 🔹 Grader Details
+The terminal reward is a weighted blend of three axes:
+1.  **Prioritization (0.35)**: Rewards helping Severity 5 zones before Severity 1 zones (calculated using exponential weighting: `2^severity`).
+2.  **Efficiency (0.40)**: Accuracy in matching the exact demand volume requested.
+3.  **Utilization (0.25)**: Minimizing waste (over-allocation) and stockpile leftovers.
+
+---
+
+## 🔹 Baseline Agent (`inference.py`)
+Our baseline agent uses an **LLM-based "Lead Architect" strategy**:
+- It manages the `/reset` and `/step` lifecycle.
+- It parses observations into structured decision histories.
+- It produces **EXACT hackathon-compliant logs** to stdout.
+
+### 📊 Sample Output
 ```text
-[START] task=easy env=deadcore-dtb model=llama-3.1-8b-instant
-[STEP] step=1 action={"action_type":"request_info","zone_id":"Z0"} reward=0.04 done=false error=null
-[STEP] step=2 action={"action_type":"allocate_resource","zone_id":"Z0","resource_type":"medicine","amount":43.7} reward=0.10 done=false error=null
-...
-[STEP] step=10 action={"action_type":"finalize"} reward=0.88 done=true error=null
-[END] success=true steps=10 rewards=0.04,0.10,0.05,0.06,0.03,0.03,0.03,0.06,0.05,0.88
+[START] task=medium env=disaster-triage-env model=llama-3.1-8b-instant
+[STEP] step=1 action={"action_type":"request_info","zone_id":"Z2"} reward=0.0800 done=false error=null
+[STEP] step=2 action={"action_type":"allocate_resource","zone_id":"Z2","resource_type":"food","amount":35.0} reward=0.1000 done=false error=null
+[END] success=true steps=10 score=0.6842 rewards=0.0800,0.1000,0.4500...
 ```
 
 ---
 
-## 🚀 Deployment & Usage
+## 🔹 Setup & Usage
 
-### 1. Local Evaluation
+### 🚀 Local Setup
 ```bash
-git clone https://github.com/Praptii21/disaster-triage-env.git
-cd disaster-triage-env
+# 1. Install dependencies
 pip install -r requirements.txt
+
+# 2. Configure variables (see .env.example)
+export API_BASE_URL="https://api.groq.com/openai/v1"
+export MODEL_NAME="llama-3.1-8b-instant"
+export HF_TOKEN="your_token_here"
+
+# 3. Start Environment Server
+python server/app.py
+
+# 4. Run Baseline Inference
 python inference.py --task medium
 ```
 
-### 2. Infrastructure (Docker)
-The environment exposes a RESTful API (FastAPI) configured for **HuggingFace Spaces** (Port 7860).
+### 🐳 Docker Instructions
 ```bash
-docker build -t deadcore_dtb:latest .
-docker run -p 7860:7860 deadcore_dtb:latest
+docker build -t disaster-triage .
+docker run -p 7860:7860 --env-file .env disaster-triage
 ```
 
 ---
 
-## 🔮 Research Roadmap
-To evolve DeadCore DTB into an enterprise-standard SRE/Response benchmark, we have mapped the following trajectories:
-- **Phase 3 (Active POMDP)**: Introducing dynamic environment updates where zone severities escalate if left unserved.
-- **Phase 4 (Multi-Agent)**: Evaluating collaborative triage protocols between distributed AI commanders.
-- **Phase 5 (Tool-Augmented)**: Integrating external diagnostic tools (e.g., API calls to simulated telemetry) for root-cause prioritization.
+## 🔹 API Endpoints
+- `POST /reset`: Initialize or restart a session (returns first observation).
+- `POST /step`: Execute an agent action.
+- `GET /state`: Global ground-truth view (for debugging/diagnostic only).
+- `GET /health`: Server liveness and active session summary.
 
 ---
 
-## 📜 Citation
-```bibtex
-@software{deadcore_dtb_2026,
-  title   = {DeadCore Disaster Triage Benchmark: Evaluating Safety-Critical Scarcity Management},
-  author  = {Team DeadCore (Prapti)},
-  year    = {2026},
-  url     = {https://huggingface.co/spaces/Praptii21/disaster-triage-env},
-  note    = {Deterministic POMDP Evaluation Environment for AI Agents}
-}
-```
+## 🔹 Performance Constraints
+- **Runtime**: Full evaluation (Easy, Medium, Hard) runs in **< 20 minutes**.
+- **Hardware**: Designed to run on standard **2 vCPU / 8GB RAM** instances.
 
 ---
-*Developed for the Meta OpenEnv Challenge 2026.*
+
+## 🔹 Creativity & Uniqueness
+- **Beyond Toy Problems**: This environment forces agents to contend with genuine operational fog, simulating logistics rather than arcade physics.
+- **Agentic Stress Test**: The tight step budgets and exploration costs separate simple chatbots from capable action-oriented agents.
+- **Logistics Modeling**: Every detail, from the resource types to the noise in the urgency signal, is designed to mirror real-world supply chain optimization during a crisis.
+
+---
+
+**Disaster Triage Environment** — *Moving Intelligence from Chat to Execution.*
