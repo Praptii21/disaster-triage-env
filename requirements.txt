@@ -8,3 +8,4 @@ python-dotenv>=1.0.0
 # ── Inference / agent dependencies ────────────────────────────────
 openai>=1.23.0
 requests>=2.31.0
+gradio>=4.0.0
