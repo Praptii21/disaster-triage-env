@@ -28,19 +28,43 @@ Existing RL benchmarks (like Atari or MuJoCo) focus on motor control or games. O
 
 ---
 
-## ⭐ Why This Benchmark Matters
-Most RL environments focus on games or static reasoning tasks. This environment evaluates **sequential decision-making under uncertainty**, where:
-- Information is incomplete (Partial Observability)
-- Resources are limited (Finite Stockpiles)
-- Decisions are irreversible (Resource Consumption)
-- Time is constrained (Hard Step Budgets)
+## 🌍 Real-World Utility
 
-It provides a realistic testbed for evaluating AI agents in operational domains such as:
-- **Disaster Response**
-- **Supply Chain Logistics**
-- **Crisis Management**
+This environment models real-world disaster response logistics where:
+
+- **Information is incomplete** (communication failure)
+- **Resources are finite** (supply chain constraints)
+- **Decisions are irreversible** (allocation cannot be undone)
+- **Time directly impacts outcomes** (delayed response reduces effectiveness)
+
+Unlike traditional RL benchmarks, this environment evaluates whether an agent can act as a decision-maker in high-stakes operational settings such as:
+
+- Emergency response coordination
+- Supply chain disruption management
+- Crisis logistics planning
 
 This makes it a benchmark for **Agentic AI**, not just predictive models.
+
+---
+
+## 💡 Novelty
+
+This environment introduces a structured benchmark for:
+
+**Resource-Constrained Decision Making under Partial Observability**
+
+Unlike existing RL benchmarks:
+- Not a game
+- Not static reasoning
+- Not single-step evaluation
+
+It combines:
+- POMDP dynamics
+- Multi-objective optimization
+- Irreversible actions
+- Time-constrained planning
+
+This makes it a test of true agentic behavior rather than pattern matching.
 
 ---
 
@@ -61,70 +85,107 @@ The environment is modeled as a **POMDP (Partially Observable Markov Decision Pr
 
 ---
 
-## ⭐ Agent Decision Flow
+## ⭐ Key Features
 
+### 🔍 Partial Observability
+Ground-truth severity and demand are hidden and must be actively revealed via `request_info`, forcing informed exploration.
 
+### 📦 Global Resource Constraints
+A shared, finite pool of Food, Water, and Medicine must be distributed across all zones, introducing real trade-offs.
 
+### ⏱️ Temporal Pressure
+Each action consumes a step and reduces achievable reward, simulating time-sensitive disaster response.
 
+### ⚖️ Multi-Objective Optimization
+Agents must simultaneously optimize prioritization, efficiency, and resource utilization, not just maximize a single metric.
 
----
-
-## 🔹 Key Features
-- **Partial Observability**: Ground-truth demand is hidden behind the `request_info` action.
-- **Resource Constraints**: Total budget for food/water/medicine is shared across all zones.
-- **Temporal Decay**: Rewards diminish every step, simulating the increasing urgency of a real-life crisis.
-- **Multi-Axis Grader**: Performance is judged on prioritization, demand fulfillment, and resource stewardship.
-
----
-
-## 🔹 Tasks & Difficulty Levels
-| Difficulty | Description | Budget | Observability |
-| :--- | :--- | :---: | :--- |
-| **Easy** | 3 Zones. Fully observable, deterministic allocation tasks. | 7 Steps | Full Visibility |
-| **Medium** | 5 Zones. Partial observability, selective exploration required. | 10 Steps | ~50% Revealed |
-| **Hard** | 7 Zones. High uncertainty + tight budget + prioritization critical. | 13 Steps | Fully Hidden |
+### 🎯 Deterministic Evaluation
+All transitions and rewards are fully reproducible, ensuring fair and consistent benchmarking across agents.
 
 ---
 
-## 🔹 Environment Design
+## 🎯 Tasks & Difficulty Levels
 
-### 🎮 Actions
-- `request_info`: Reveal zone-level severity and demand (Cost: -0.01 reward).
-- `allocate_resource`: Dispatch specific volume of a resource (Cost: -0.02 reward).
-- `finalize`: Termination command to trigger the final grader.
-
-### 👁️ Observations
-- `zones`: Array containing `urgency_signal`, `revealed`, and (if revealed) `known_severity` and `known_demand`.
-- `available_resources`: Current stockpiles of Food, Water, and Medicine.
-- `step_count` / `max_steps`: Current action budget progress.
-- `data_completeness`: Ratio of environmental knowledge vs. the unknown.
-
-### 💰 Rewards
-- **Step-wise Rewards**: Encourages finding new info (+0.05) and correct demand filling (+0.10).
-- **Final Reward**: A blended score from the 3-axis Grader, scaled by difficulty.
+| Difficulty | Description | Step Budget | Observability | Core Challenge |
+| :--- | :--- | :---: | :--- | :--- |
+| **Easy** | 3 Zones with fully visible data | 7 | Full | Allocation correctness |
+| **Medium** | 5 Zones with partial hidden information | 10 | ~50% Revealed | Explore vs Exploit |
+| **Hard** | 7 Zones with high uncertainty and tight budget | 13 | Fully Hidden | Prioritization under constraints |
 
 ---
 
-## 🔹 Grader Details
-The terminal reward is a weighted blend of three axes:
-1.  **Prioritization (0.35)**: Rewards helping Severity 5 zones before Severity 1 zones (calculated using exponential weighting: `2^severity`).
-2.  **Efficiency (0.40)**: Accuracy in matching the exact demand volume requested.
-3.  **Utilization (0.25)**: Minimizing waste (over-allocation) and stockpile leftovers.
+## 🧠 Environment Design
+
+### 🎮 Action Space
+- **`request_info`**
+  - Reveals true severity and demand for a zone
+  - → Trade-off: costs a step, but reduces uncertainty
+- **`allocate_resource`**
+  - Allocates a specific quantity of a resource to a zone
+  - → Constraint: irreversible and bounded by global supply
+- **`finalize`**
+  - Terminates the episode and triggers final evaluation
+  - → Risk: premature finalization reduces achievable score
+
+### 👁️ Observation Space
+At each step, the agent receives:
+- **`zones`**: Array of zone objects containing:
+  - `urgency_signal` (noisy indicator)
+  - `revealed` (boolean)
+  - `known_severity` (if revealed)
+  - `known_demand` (if revealed)
+- **`available_resources`**: Remaining global stockpile of Food, Water, Medicine
+- **`step_count` / `max_steps`**: Tracks remaining decision budget
+- **`data_completeness`**: Fraction of zones with revealed ground-truth data
 
 ---
 
-## 🔹 Baseline Agent (`inference.py`)
-Our baseline agent uses an **LLM-based "Lead Architect" strategy**:
-- It manages the `/reset` and `/step` lifecycle.
-- It parses observations into structured decision histories.
-- It produces **EXACT hackathon-compliant logs** to stdout.
+## 💰 Reward Design
+The reward function is structured to discourage guessing and encourage precise, high-impact decisions:
 
+### Step-wise Signals
+- Small positive rewards for meaningful actions (information gain, correct allocation)
+- Implicit cost of time via limited step budget
+
+### Terminal Reward
+- Final score computed using a deterministic multi-axis grader
+- Normalized to (0.01 – 0.99) for OpenEnv compliance
+
+---
+
+## 📊 Grader Design (Deterministic)
+The final score is a weighted combination of three axes:
+
+**Final Score = (0.35 × Prioritization) + (0.40 × Efficiency) + (0.25 × Utilization)**
+
+1.  **Prioritization (35%)**
+    - Rewards serving high-severity zones first
+    - Uses severity-weighted scaling (e.g., 2^severity)
+    - Ensures critical zones contribute disproportionately more
+2.  **Efficiency (40%)**
+    - Measures how accurately the agent matches actual demand
+    - Penalizes under-allocation and missed needs
+3.  **Utilization (25%)**
+    - Penalizes over-allocation and wasted resources
+    - Encourages optimal use of limited supply
+
+👉 **Key Property:** High scores are only achievable through correct prioritization + precise allocation + minimal waste
+
+---
+
+## 🤖 Baseline Agent (`inference.py`)
+The baseline agent simulates an LLM-driven disaster response coordinator:
+- Executes a full agent loop using `/reset` and `/step`
+- Interprets observations into structured decision context
+- Balances exploration (`request_info`) and execution (`allocate_resource`)
+- Emits strictly formatted logs: `[START]`, `[STEP]`, `[END]`
+- Produces fully reproducible evaluation runs for all difficulty tiers
 ### 📊 Sample Output
 ```text
 [START] task=medium env=disaster-triage-env model=llama-3.1-8b-instant
-[STEP] step=1 action={"action_type":"request_info","zone_id":"Z2"} reward=0.0800 done=false error=null
-[STEP] step=2 action={"action_type":"allocate_resource","zone_id":"Z2","resource_type":"food","amount":35.0} reward=0.1000 done=false error=null
-[END] success=true steps=10 score=0.6842 rewards=0.0800,0.1000,0.4500...
+[STEP] step=1 action={"action_type":"request_info","zone_id":"Z2"} reward=0.0200 done=false error=null
+[STEP] step=2 action={"action_type":"allocate_resource","zone_id":"Z2","resource_type":"food","amount":35.0} reward=0.0500 done=false error=null
+[END] success=true steps=10 score=0.684 rewards=0.02,0.05,0.45...
 ```
 
 ---
@@ -145,7 +206,7 @@ export HF_TOKEN="your_token_here"
 python server/app.py
 
 # 4. Run Baseline Inference
-python inference.py 
+python inference.py --task medium
 ```
 
 ### 🐳 Docker Instructions
