@@ -1,3 +1,18 @@
+---
+title: Disaster Triage Environment
+emoji: 🚑
+colorFrom: red
+colorTo: gray
+sdk: docker
+app_port: 7860
+tags:
+  - openenv
+  - disaster-triage
+  - agentic-ai
+  - pomdp
+  - rescue-logistics
+short_description: Deterministic evaluation of agentic decision-making in disaster triage.
+---
 # 🚨 Disaster Triage Environment (DTE)
 
 An OpenEnv-compliant reinforcement learning benchmark for evaluating agentic decision-making in resource-constrained disaster logistics.
