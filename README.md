@@ -86,7 +86,7 @@ The environment is modeled as a **POMDP (Partially Observable Markov Decision Pr
 
 ---
 
-## ⭐ Key Features
+### ⭐ Key Features
 
 ### 🔍 Partial Observability
 Ground-truth severity and demand are hidden and must be actively revealed via `request_info`, forcing informed exploration.
@@ -102,6 +102,11 @@ Agents must simultaneously optimize prioritization, efficiency, and resource uti
 
 ### 🎯 Deterministic Evaluation
 All transitions and rewards are fully reproducible, ensuring fair and consistent benchmarking across agents.
+
+### 🔥 Dynamic Urgency Escalation (Novel Mechanic)
+Zones that are revealed but not acted upon within a limited number of steps experience an increase in effective severity.
+- **Commitment Pressure**: Encourages immediate action after information gathering.
+- **Dynamic POMDP**: Transforms the environment from a static allocation problem into an evolving crisis system.
 
 ---
 
