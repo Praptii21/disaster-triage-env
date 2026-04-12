@@ -20,7 +20,7 @@ Sessions are keyed by task_id ("easy" | "medium" | "hard" or any string).
 """
 
 from __future__ import annotations
-
+import uvicorn
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -472,3 +472,10 @@ async def delete_session(
     _created_at.pop(task_id, None)
     return {"message": f"Session '{task_id}' deleted."}
 
+import uvicorn
+
+def main():
+    uvicorn.run("server.app:app", host="0.0.0.0", port=7860, reload=False)
+
+if __name__ == "__main__":
+    main()
