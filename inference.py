@@ -44,7 +44,8 @@ load_dotenv()
 # Environment variables
 # ---------------------------------------------------------------------------
 
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+# LLM Proxy (must be provided by the environment, e.g. LiteLLM)
+LLM_API_BASE: str = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME:   str = os.getenv("MODEL_NAME",   "gpt-4.1-mini")
 HF_TOKEN:     str | None = os.getenv("HF_TOKEN")
 
@@ -57,7 +58,7 @@ else:
     # OpenAI client (OpenAI-compatible, pointed at API_BASE_URL)
     # ---------------------------------------------------------------------------
     client = OpenAI(
-        base_url=API_BASE_URL,
+        base_url=LLM_API_BASE,
         api_key=HF_TOKEN,
     )
 
@@ -65,8 +66,8 @@ else:
 # Server interaction helpers
 # ---------------------------------------------------------------------------
 
-# Local FastAPI server detection (dynamic port for Docker/HF)
-_LOCAL_PORT = os.getenv("BACKEND_PORT", "8000")
+# Local FastAPI server detection (Unified port 7860)
+_LOCAL_PORT = os.getenv("PORT", "7860")
 ENV_SERVER_URL: str = f"http://127.0.0.1:{_LOCAL_PORT}"
 
 
