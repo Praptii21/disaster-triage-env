@@ -242,9 +242,40 @@ def _clamp_reward(reward: float) -> float:
 # Routes
 # ---------------------------------------------------------------------------
 
-@app.get("/", include_in_schema=False)
+@app.get("/", summary="Root metadata", tags=["System"])
 async def root():
-    return RedirectResponse(url="/docs")
+    """Returns basic environment metadata. Preferred over /docs for automated health checks."""
+    return {
+        "name": "disaster-triage-env",
+        "version": "1.0.0",
+        "status": "ready",
+        "endpoints": {
+            "reset": "/reset",
+            "step": "/step",
+            "state": "/state",
+            "health": "/health",
+            "info": "/info"
+        }
+    }
+
+
+@app.get(
+    "/info",
+    summary="Detailed environment specification",
+    tags=["System"],
+)
+async def info():
+    """Returns detailed information about the environment configuration."""
+    return {
+        "name": "disaster-triage-env",
+        "description": "POMDP-based disaster triage RL environment",
+        "difficulties": ["easy", "medium", "hard"],
+        "action_space": ["request_info", "allocate_resource", "finalize"],
+        "observation_space": {
+            "global": ["available_resources", "step_count", "max_steps", "data_completeness"],
+            "zone": ["zone_id", "urgency_signal", "revealed", "known_severity", "known_demand", "allocated"]
+        }
+    }
 
 
 @app.get(
