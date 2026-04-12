@@ -192,8 +192,11 @@ def run_simulation(task: str) -> Generator:
             yield "\n".join(logs); return
         
         data = resp.json(); obs = data.get("observation", {}); done = data.get("done", False)
-        history = []; step = 0; total_reward = 0
-        logs.append(f"> Connected to backend at {base_url}")
+        rewards_list = []
+        model = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
+        
+        # [START] task=<task_name> env=<benchmark> model=<model_name>
+        logs.append(f"[START] task={task} env=disaster-triage-env model={model}")
         yield "\n".join(logs)
 
         while not done:
@@ -208,12 +211,19 @@ def run_simulation(task: str) -> Generator:
                 logs.append(f"ERROR: Step failed ({resp.status_code})"); break
                 
             res = resp.json(); obs = res.get("observation", {}); reward = res.get("reward", 0.0)
-            done = res.get("done", False); total_reward += reward
-            logs.append(f"step={step} action={json.dumps(action)} reward={reward:.4f} done={str(done).lower()}")
+            done = res.get("done", False)
+            rewards_list.append(reward)
+            
+            # [STEP] step=N action={...} reward=0.0000 done=false error=null
+            action_json = json.dumps(action, separators=(',', ':'))
+            logs.append(f"[STEP] step={step} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null")
             yield "\n".join(logs)
             time.sleep(1.0)
 
-        logs.append(f"\n[END] MISSION COMPLETE | steps={step} score={total_reward:.3f}")
+        # [END] success=true steps=12 score=0.337 rewards=0.04,0.03...
+        mission_score = rewards_list[-1] if rewards_list else 0.001
+        rewards_str = ",".join(f"{r:.2f}" for r in rewards_list)
+        logs.append(f"[END] success={str(done).lower()} steps={step} score={mission_score:.3f} rewards={rewards_str}")
         yield "\n".join(logs)
     except Exception as e:
         logs.append(f"fatal_error: {str(e)}"); yield "\n".join(logs)
