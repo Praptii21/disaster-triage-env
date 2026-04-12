@@ -4,7 +4,7 @@
 # 1. Start the Unified Server (FastAPI + Gradio)
 # HF will provide the PORT env var (7860)
 echo "Starting Unified Triage Server on port ${PORT:-7860}..."
-PYTHONPATH=. python server/app.py &
+PYTHONPATH=. python server/main.py &
 
 # 2. Wait for the server to be ready
 echo "Waiting for unified server to start..."

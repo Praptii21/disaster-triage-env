@@ -2,7 +2,7 @@
 
 # Start the FastAPI server in the background
 echo "[SYSTEM] Starting environment server on port 7860..."
-uvicorn server.app:app --host 0.0.0.0 --port 7860 &
+uvicorn server.main:app --host 0.0.0.0 --port 7860 &
 
 # Wait for the server to be healthy
 echo "[SYSTEM] Waiting for server health check..."
