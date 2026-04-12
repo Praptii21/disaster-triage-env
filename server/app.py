@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from fastapi import Body, FastAPI, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.env import DisasterTriageEnv
@@ -66,14 +67,15 @@ def _get_session(task_id: str) -> DisasterTriageEnv:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Bootstrap one session per difficulty — make() already calls reset(),
-    # but we call reset() again explicitly so the lifespan is self-contained
-    # even if make() changes in the future.
     for diff in ("easy", "medium", "hard"):
-        env = DisasterTriageEnv.make(diff)   # make() calls reset() internally
-        env.reset()                           # explicit reset — belt-and-suspenders
-        _sessions[diff]   = env
-        _created_at[diff] = time.time()
+        try:
+            env = DisasterTriageEnv.make(diff)
+            env.reset()
+            _sessions[diff]   = env
+            _created_at[diff] = time.time()
+            print(f"[startup] Session '{diff}' initialized OK")
+        except Exception as e:
+            print(f"[startup] ERROR initializing '{diff}': {e}")
     yield
     _sessions.clear()
     _created_at.clear()
@@ -126,16 +128,16 @@ class ResetRequest(BaseModel):
 
 class ActionRequest(BaseModel):
     """POST /step — agent action."""
-    task_id:       str            = Field("medium")
-    action_type:   str            = Field(..., description="request_info | allocate_resource | finalize")
-    zone_id:       Optional[str]  = Field(None, description="Zone ID: 'Z0', 'Z1', ...")
-    resource_type: Optional[str]  = Field(None, description="food | water | medicine")
+    task_id:       str             = Field("medium")
+    action_type:   str             = Field(..., description="request_info | allocate_resource | finalize")
+    zone_id:       Optional[str]   = Field(None, description="Zone ID: 'Z0', 'Z1', ...")
+    resource_type: Optional[str]   = Field(None, description="food | water | medicine")
     amount:        Optional[float] = Field(None, gt=0)
 
     model_config = {"json_schema_extra": {
         "examples": [
-            {"task_id": "medium", "action_type": "request_info",      "zone_id": "Z2"},
-            {"task_id": "medium", "action_type": "allocate_resource",  "zone_id": "Z0",
+            {"task_id": "medium", "action_type": "request_info",     "zone_id": "Z2"},
+            {"task_id": "medium", "action_type": "allocate_resource", "zone_id": "Z0",
              "resource_type": "food", "amount": 30.0},
             {"task_id": "medium", "action_type": "finalize"},
         ]
@@ -147,10 +149,6 @@ class ActionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ResetResponse(BaseModel):
-    """
-    OpenEnv /reset response.
-    NO reward field — reward is only meaningful after actions.
-    """
     task_id:     str
     observation: Dict[str, Any]
     done:        bool = False
@@ -158,23 +156,14 @@ class ResetResponse(BaseModel):
 
 
 class StepResponse(BaseModel):
-    """
-    OpenEnv /step response.
-    reward is ONLY at the top level — never duplicated inside info.
-    Reward is clamped to [0, 1] at finalize; negative on intermediate steps.
-    """
     task_id:     str
     observation: Dict[str, Any]
-    reward:      float           # top-level only; clamped to [0,1] at terminal step
+    reward:      float
     done:        bool
-    info:        Dict[str, Any]  # must NOT contain a "reward" key
+    info:        Dict[str, Any]
 
 
 class StateResponse(BaseModel):
-    """
-    GET /state — full internal (ground-truth) state.
-    Exposes true severity + demand (not masked), unlike /observation.
-    """
     task_id:             str
     step_count:          int
     max_steps:           int
@@ -199,7 +188,7 @@ class SessionInfo(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helper — parse Action from ActionRequest
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _parse_action(req: ActionRequest) -> Action:
@@ -242,12 +231,10 @@ def _parse_action(req: ActionRequest) -> Action:
 
 
 def _strip_reward_from_info(info: dict) -> dict:
-    """Ensure 'reward' never leaks into the info dict (OpenEnv compliance)."""
     return {k: v for k, v in info.items() if k != "reward"}
 
 
 def _clamp_reward(reward: float) -> float:
-    """Clamp terminal reward strictly between (0, 1) for compliance."""
     return round(float(np.clip(reward, 0.01, 0.99)), 3)
 
 
@@ -255,7 +242,17 @@ def _clamp_reward(reward: float) -> float:
 # Routes
 # ---------------------------------------------------------------------------
 
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/docs")
 
+
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Server liveness check",
+    tags=["System"],
+)
 async def health() -> HealthResponse:
     """Returns server status and a summary of all active sessions."""
     session_info = {}
@@ -267,7 +264,6 @@ async def health() -> HealthResponse:
             "num_zones":   env.config.num_zones,
             "age_seconds": round(time.time() - _created_at.get(tid, 0), 1),
         }
-
     return HealthResponse(
         status="ok",
         version="1.0.0",
@@ -275,11 +271,6 @@ async def health() -> HealthResponse:
         sessions=session_info,
     )
 
-
-@app.get("/health", tags=["system"])
-async def health_check():
-    """Liveness probe for monitoring and orchestration."""
-    return {"status": "ok", "timestamp": time.time()}
 
 @app.post(
     "/reset",
@@ -289,22 +280,21 @@ async def health_check():
 )
 async def reset(request: Request) -> ResetResponse:
     """
-    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
-    Handles missing or empty bodies by defaulting to 'easy'.
+    Handles missing or empty bodies by defaulting to 'medium'.
     """
     try:
         body = await request.json()
     except Exception:
         body = {}
 
-    task_id    = body.get("task_id", "easy")
-    difficulty = body.get("difficulty", task_id)
+    task_id    = body.get("task_id",    "medium")
+    difficulty = body.get("difficulty", "medium")
     seed       = body.get("seed")
 
     try:
         diff_enum = Difficulty(str(difficulty).lower())
     except (ValueError, AttributeError):
-        diff_enum = Difficulty.EASY
+        diff_enum = Difficulty.MEDIUM
 
     env = DisasterTriageEnv(difficulty=diff_enum, seed=seed)
     obs = env.reset(seed=seed)
@@ -332,18 +322,14 @@ async def reset(request: Request) -> ResetResponse:
     tags=["Environment"],
 )
 async def step(request: Request) -> StepResponse:
-    """
-    STRICT COMPLIANCE: Uses raw Request to bypass Pydantic body validation.
-    """
     try:
         body = await request.json()
     except Exception:
         body = {}
 
-    task_id = body.get("task_id", "easy")
+    task_id = body.get("task_id", "medium")
     env     = _get_session(task_id)
 
-    # Use default action if body is missing/empty
     try:
         req = ActionRequest(**body)
     except Exception:
@@ -352,7 +338,6 @@ async def step(request: Request) -> StepResponse:
     action = _parse_action(req)
     obs, reward, done, info = env.step(action)
 
-    # All rewards (including intermediate) must be strictly in (0, 1)
     final_reward = _clamp_reward(reward)
     clean_info   = _strip_reward_from_info(info)
 
@@ -372,26 +357,8 @@ async def step(request: Request) -> StepResponse:
     tags=["Environment"],
 )
 async def state(task_id: str = "medium") -> StateResponse:
-    """
-    Returns the **full internal state** of the environment — including
-    true severity and demand for every zone (not hidden/masked).
-
-    This is NOT the agent's observation. Use `/step` response for that.
-
-    Fields returned per zone:
-    - `zone_id`, `true_severity`, `true_demand`
-    - `allocated` (resources deployed so far)
-    - `urgency_signal` (noisy float 0–1, always visible)
-    - `revealed` (whether the agent has called request_info)
-    - `known_severity` (-1 if not revealed)
-    - `known_demand` (null if not revealed)
-    """
-    env = _get_session(task_id)
-
-    # Delegate to env.get_full_state() which explicitly iterates self.zones
-    # and pulls true_severity + true_demand for every zone.
+    env  = _get_session(task_id)
     full = env.get_full_state()
-
     return StateResponse(
         task_id=task_id,
         step_count=full["step_count"],
@@ -408,15 +375,7 @@ async def state(task_id: str = "medium") -> StateResponse:
     tags=["Diagnostic"],
 )
 async def explain(task_id: str = "medium") -> Dict[str, Any]:
-    """
-    **Optional diagnostic — not required by OpenEnv.**
-
-    Returns a per-zone grader breakdown showing how the current allocation
-    would score across the three axes (prioritization, efficiency, utilization).
-
-    Safe to ignore; does not advance the environment.
-    """
-    env = _get_session(task_id)
+    env    = _get_session(task_id)
     report = env.grader.explain(
         zones=env.zones,
         initial_resources=env._initial_resources,
@@ -436,7 +395,6 @@ async def explain(task_id: str = "medium") -> Dict[str, Any]:
     tags=["System"],
 )
 async def list_sessions() -> Dict[str, Any]:
-    """Lists all task_ids currently tracked by the server."""
     return {
         "active_sessions": len(_sessions),
         "sessions": [
@@ -460,7 +418,6 @@ async def list_sessions() -> Dict[str, Any]:
 async def delete_session(
     task_id: str = Path(..., description="Session to delete"),
 ) -> Dict[str, str]:
-    """Removes the session from the store and frees memory."""
     if task_id in ("easy", "medium", "hard"):
         raise HTTPException(
             status_code=400,
@@ -472,10 +429,10 @@ async def delete_session(
     _created_at.pop(task_id, None)
     return {"message": f"Session '{task_id}' deleted."}
 
-import uvicorn
 
 def main():
     uvicorn.run("server.app:app", host="0.0.0.0", port=7860, reload=False)
+
 
 if __name__ == "__main__":
     main()
