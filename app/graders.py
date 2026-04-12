@@ -24,18 +24,18 @@ from app.models import ResourceBundle, ResourceType, Zone
 # Grader constants
 # ---------------------------------------------------------------------------
 
-W_PRIORITIZATION: float = 0.50
-W_EFFICIENCY:     float = 0.30
-W_UTILIZATION:    float = 0.20
+W_PRIORITIZATION: float = 0.35
+W_EFFICIENCY:     float = 0.40
+W_UTILIZATION:    float = 0.25
 
 # Severity thresholds
 HIGH_SEVERITY_THRESHOLD: int   = 4
 LOW_SEVERITY_THRESHOLD:  int   = 2
 
 # Critical zones must have received this fraction of their demand
-HIGH_SEVERITY_MIN_FRACTION: float = 0.40
+HIGH_SEVERITY_MIN_FRACTION: float = 0.80
 # Low-priority zones — allocating up to this fraction is acceptable
-LOW_SEVERITY_MAX_FRACTION:  float = 0.40
+LOW_SEVERITY_MAX_FRACTION:  float = 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -130,40 +130,30 @@ class DisasterTriageGrader:
             demand_total = zone.true_demand.total()
             alloc_total  = zone.allocated.total()
 
-            # Weight: High severity (4-5) gets weight 2.0, others 1.0
-            weight = 2.0 if zone.true_severity >= HIGH_SEVERITY_THRESHOLD else 1.0
+        for zone in zones:
+            demand_total = zone.true_demand.total()
+            alloc_total  = zone.allocated.total()
+
+            # Mathematical Definition: Zone Weight = 2 ^ severity
+            weight = 2.0 ** zone.true_severity
             weights.append(weight)
 
             if demand_total <= 0.0:
                 scores.append(1.0)
                 continue
 
+            # Fractional fulfillment score
             fraction = alloc_total / demand_total
-
             if zone.true_severity >= HIGH_SEVERITY_THRESHOLD:
-                # High severity: reward proportionally, full score at 40%+ of demand
-                if fraction >= HIGH_SEVERITY_MIN_FRACTION:
-                    score = 1.0
-                else:
-                    # Gentler curve: partial credit scales smoothly
-                    score = (fraction / HIGH_SEVERITY_MIN_FRACTION) * 0.8
+                score = 1.0 if fraction >= HIGH_SEVERITY_MIN_FRACTION else (fraction / HIGH_SEVERITY_MIN_FRACTION)
             elif zone.true_severity <= LOW_SEVERITY_THRESHOLD:
-                if fraction <= LOW_SEVERITY_MAX_FRACTION:
-                    score = 1.0
-                else:
-                    # Gentle penalty for over-serving low priority
-                    excess = fraction - LOW_SEVERITY_MAX_FRACTION
-                    score = max(0.0, 1.0 - excess * 1.0)
+                score = 1.0 if fraction <= LOW_SEVERITY_MAX_FRACTION else max(0.0, 1.0 - (fraction - LOW_SEVERITY_MAX_FRACTION))
             else:
-                # Medium severity: broad acceptable range (20%-80%)
-                target = 0.50
-                distance = abs(fraction - target)
-                score = max(0.0, 1.0 - distance * 1.0)
+                score = 1.0 - abs(fraction - 0.5)
 
-            # Information Bonus: +0.05 if it's the highest severity zone and was revealed
-            is_highest = (zone.true_severity == max(z.true_severity for z in zones))
-            if is_highest and zone.revealed:
-                score = min(1.0, score + 0.05)
+            # Information Bonus
+            if zone.revealed and zone.true_severity == max(z.true_severity for z in zones):
+                score = min(1.0, score + 0.02)
 
             scores.append(float(np.clip(score, 0.0, 1.0)))
 
@@ -187,81 +177,54 @@ class DisasterTriageGrader:
 
         errors: List[float] = []
 
+        total_useful_alloc = 0.0
+        total_demand       = 0.0
+
         for zone in zones:
             for resource in ResourceType:
                 demand = getattr(zone.true_demand, resource.value)
                 alloc  = getattr(zone.allocated,   resource.value)
+                total_useful_alloc += min(alloc, demand)
+                total_demand       += demand
 
-                if demand > 0.0:
-                    # Normalize by demand so all resources are on the same scale
-                    normalized_error = abs(alloc - demand) / demand
-                    errors.append(min(normalized_error, 1.0))
-                else:
-                    # No demand for this resource — any allocation is waste
-                    if alloc > 0.0:
-                        errors.append(1.0)
-                    # else perfectly correct (zero demand, zero alloc)
-
-        if not errors:
+        if total_demand <= 0.0:
             return 1.0
 
-        mae        = float(np.mean(errors))
-        # Softer efficiency curve: square root to reward partial effort
-        efficiency = 1.0 - (mae ** 0.7)
+        # Efficiency = Σ(min(allocated, demand)) / Σ(demand)
+        efficiency = total_useful_alloc / total_demand
 
         # Efficiency Penalty: Subtract 0.05 for every zone that is significantly over-allocated (>110%)
         over_allocation_penalty = 0.0
         for zone in zones:
             if zone.true_demand.total() > 0:
                 if (zone.allocated.total() / zone.true_demand.total()) > 1.10:
-                    over_allocation_penalty += 0.05
+                    over_allocation_penalty += 0.10
 
         efficiency = max(0.0, efficiency - over_allocation_penalty)
         return float(np.clip(efficiency, 0.0, 1.0))
 
     # -----------------------------------------------------------------------
     # Axis 3 – Resource Utilization (20%)
-    # -----------------------------------------------------------------------
-
     def _resource_utilization(
         self,
         initial_resources:   ResourceBundle,
-        remaining_resources: ResourceBundle,
+        available_resources: ResourceBundle,
         zones:               List[Zone],
     ) -> float:
-        """
-        Rewards the agent for converting available resources into impact
-        without over-allocating or leaving large surpluses.
+        total_allocated = sum(z.allocated.total() for z in zones)
+        if total_allocated <= 0.0:
+            return 0.0
 
-        Strategy:
-          productive = sum of min(alloc, demand) across all zones × resources
-          utilization = productive / min(total_initial, total_true_demand)
-
-        Returns: float in [0, 1]
-        """
-        initial_total = initial_resources.total()
-        if initial_total <= 0.0:
-            return 1.0
-
-        # Sum up how much allocation actually met genuine demand
-        productive  = 0.0
-        total_demand = 0.0
-
+        total_waste = 0.0
         for zone in zones:
             for resource in ResourceType:
-                demand    = getattr(zone.true_demand, resource.value)
-                alloc     = getattr(zone.allocated,   resource.value)
-                productive  += min(alloc, max(demand, 0.0))
-                total_demand += max(demand, 0.0)
+                demand = getattr(zone.true_demand, resource.value)
+                alloc  = getattr(zone.allocated,   resource.value)
+                # Waste = Σ(max(allocated - demand, 0))
+                total_waste += max(alloc - demand, 0.0)
 
-        if total_demand <= 0.0:
-            # No demand anywhere — best score if nothing was deployed
-            deployed = initial_total - remaining_resources.clamp_positive().total()
-            return 1.0 if deployed == 0.0 else 0.0
-
-        # Upper-bound productive deployment by what was available
-        denominator = min(initial_total, total_demand)
-        utilization = productive / denominator
+        # Utilization = 1 - (Waste / Total Allocated)
+        utilization = 1.0 - (total_waste / total_allocated)
         return float(np.clip(utilization, 0.0, 1.0))
 
     # -----------------------------------------------------------------------
