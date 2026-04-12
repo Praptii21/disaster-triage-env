@@ -152,25 +152,24 @@ def run_simulation(task: str) -> Generator:
             rewards_list.append(reward)
 
             action_type = action.get("action_type", "")
-            zone = action.get("zone_id", "")
-            resource = action.get("resource_type", "")
-            amount = action.get("amount", "")
-
-            # Pretty action label
-            if action_type == "request_info":
-                action_label = f"🔍 INFO      {zone}"
-            elif action_type == "allocate_resource":
-                action_label = f"📦 ALLOCATE  {zone} ← {resource} ×{amount}"
-            elif action_type == "finalize":
-                action_label = f"✔  FINALIZE"
-            else:
-                action_label = action_type
-
-            reward_bar = "█" * int(reward * 20)
+            zone        = action.get("zone_id", "")
+            resource    = action.get("resource_type", "")
+            amount      = action.get("amount", "")
             action_json = json.dumps(action, separators=(',', ':'))
-            logs.append(
-                f"  [{step_n:02d}] {action_label:<35} reward={reward:.4f} {reward_bar}"
-            )
+
+            resource_icons = {"food": "🍱", "water": "💧", "medicine": "🧪"}
+            icon = resource_icons.get(resource, "📦")
+            reward_bar = "🟩" * int(reward * 10)
+
+            if action_type == "request_info":
+                logs.append(f"  [{step_n:02d}] 🔍 INFO      {zone:<6}  reward={reward:.4f}")
+            elif action_type == "allocate_resource":
+                logs.append(f"  [{step_n:02d}] {icon} ALLOCATE  {zone} ← {resource} ×{amount:<6}  reward={reward:.4f}  {reward_bar}")
+            elif action_type == "finalize":
+                logs.append(f"  [{step_n:02d}] ✔  FINALIZE{'':20}  reward={reward:.4f}  {reward_bar}")
+            else:
+                logs.append(f"  [{step_n:02d}] {action_type:<35}  reward={reward:.4f}  {reward_bar}")
+
             logs.append(
                 f"       [STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null"
             )
@@ -222,11 +221,11 @@ body, .gradio-container {
 }
 
 #title-block p {
-    color: #ff4444 !important;
-    font-size: 0.75rem !important;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    margin: 0 !important;
+    color: #64748b !important;
+    font-size: 0.85rem !important;
+    font-style: italic;
+    margin-top: 0.5rem !important;
+    line-height: 1.4;
 }
 
 .label-wrap label span {
@@ -275,14 +274,13 @@ textarea {
 footer { display: none !important; }
 """
 
-with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
+with gr.Blocks(css=CSS, title="DISASTER TRIAGE ENV // COMMAND") as demo:
 
     with gr.Column(elem_id="title-block"):
         gr.HTML("""
         <div id="title-block">
-            <h1> DISASTER TRIAGE ENV</h1>
+            <h1><strong> DISASTER TRIAGE ENV</strong></h1>
             <p>Dynamic Resource Orchestration & Logistics Optimization Benchmark , Sstrategic multi-objective allocation of food, water, and medicine under partial observability.</p>
-           
         </div>
         """)
 
