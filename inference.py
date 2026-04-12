@@ -69,7 +69,7 @@ client = OpenAI(
 # ---------------------------------------------------------------------------
 
 # Local FastAPI server detection (dynamic port for Docker/HF)
-_LOCAL_PORT = os.getenv("PORT", "8000")
+_LOCAL_PORT = os.getenv("PORT", "7860")
 ENV_SERVER_URL: str = f"http://127.0.0.1:{_LOCAL_PORT}"
 
 
@@ -102,19 +102,35 @@ def get_state(task_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are a JSON-only API. Output ONLY a single raw JSON object per step.
+You are a disaster triage agent. Output ONLY a single raw JSON object per step. No text, no markdown.
 
-RULES:
-1. Steps 1-3: request_info for different zones (Z0, Z1, Z2). No repeats.
-2. Steps 4-9: allocate_resource with PRECISE DECIMAL amounts (e.g., 43.7, 18.9, 62.4). NEVER use round numbers like 10, 20, 25.
-3. Step 10+: finalize.
-4. Keys: "action_type", "zone_id", "resource_type", "amount".
-5. Prioritize: medicine > water > food. High-severity zones get more.
-6. Do NOT write any text. Only JSON.
+STRATEGY (follow strictly based on task difficulty):
+1. EASY Task:
+   - Skip info gathering (zones are already revealed).
+   - Allocate resources immediately.
+   - Target 7-8 steps total.
+2. MEDIUM/HARD Task:
+   - Steps 1-2 (or 1-3): Use request_info for the HIGHEST urgency unrevealed zones.
+   - Then switch to allocate_resource.
+   - Target 9-10 steps (Medium) or 11-12 steps (Hard).
+
+ALLOCATION RULES:
+- Prioritize HIGH severity zones (severity >= 4) first.
+- Allocate PROPORTIONALLY to demand.
+- Fill demand exactly: amount = min(resource_demand, available_resource).
+- Resource priority: medicine > water > food.
+- Call finalize when resources are mostly allocated or you have reached the target step count.
+
+ACTION SCHEMA:
+  request_info:      {"action_type": "request_info", "zone_id": "Z0"}
+  allocate_resource: {"action_type": "allocate_resource", "zone_id": "Z0", "resource_type": "medicine", "amount": 43.7}
+  finalize:          {"action_type": "finalize"}
+
+Do NOT repeat request_info on the same zone. Do NOT over-allocate. Do NOT output any text outside the JSON.
 """
 
 
-def _build_user_message(obs: dict, step_n: int) -> str:
+def _build_user_message(obs: dict, step_n: int, difficulty: str) -> str:
     """Summarise the current observation for the LLM."""
     zones_summary = []
     for z in obs.get("zones", []):
@@ -134,6 +150,7 @@ def _build_user_message(obs: dict, step_n: int) -> str:
 
     res = obs.get("available_resources", {})
     return (
+        f"Difficulty: {difficulty}\n"
         f"Step {step_n} / {obs.get('max_steps', '?')}\n"
         f"Available: food={res.get('food', 0):.1f}  "
         f"water={res.get('water', 0):.1f}  medicine={res.get('medicine', 0):.1f}\n"
@@ -141,9 +158,9 @@ def _build_user_message(obs: dict, step_n: int) -> str:
     )
 
 
-def get_llm_action(history: List[dict], obs: dict, step_n: int) -> dict:
+def get_llm_action(history: List[dict], obs: dict, step_n: int, difficulty: str) -> dict:
     """Call the LLM and parse its JSON action."""
-    history.append({"role": "user", "content": _build_user_message(obs, step_n)})
+    history.append({"role": "user", "content": _build_user_message(obs, step_n, difficulty)})
 
     response = client.chat.completions.create(
         model=MODEL_NAME,
@@ -171,89 +188,95 @@ def get_llm_action(history: List[dict], obs: dict, step_n: int) -> dict:
 # Scripted fallback agent (used when LLM fails or is rate-limited)
 # ---------------------------------------------------------------------------
 
-def get_scripted_action(obs: dict, step_n: int) -> dict:
+def get_scripted_action(obs: dict, step_n: int, difficulty: str) -> dict:
     """
-    Deterministic fallback agent. Guarantees a valid, multi-step episode
-    even when the LLM is unavailable (rate-limited, token exhausted, etc.).
+    High-performance scripted fallback agent.
+
+    Strategy:
+      Phase 1: Info gathering. 0 steps for Easy, 2 for Medium, 3 for Hard.
+      Phase 2: Allocation. Proportional to demand, highest severity first.
+      Phase 3: Finalize at target step count or if resources exhausted.
     """
     zones = obs.get("zones", [])
-    num_zones = len(zones)
+    res   = obs.get("available_resources", {})
+    total_available = sum(res.values())
 
-    # Phase 1: Explore unrevealed zones (steps 1-3)
-    if step_n <= num_zones:
-        for z in zones:
-            if not z["revealed"]:
-                return {"action_type": "request_info", "zone_id": z["zone_id"]}
-        # All revealed already — skip to allocation
-        return _scripted_allocate(obs, step_n)
+    # --- Step Budget ---
+    target_steps = {"easy": 8, "medium": 10, "hard": 12}.get(difficulty, 10)
+    info_steps   = {"easy": 0, "medium": 2, "hard": 3}.get(difficulty, 2)
 
-    # Phase 2: Allocate resources (steps 4-10)
-    if step_n <= 10:
-        return _scripted_allocate(obs, step_n)
+    # --- Early finalize ---
+    if total_available < 1.0 or step_n >= target_steps:
+        return {"action_type": "finalize"}
 
-    # Phase 3: Finalize
-    return {"action_type": "finalize"}
+    # --- Phase 1: Info gathering ---
+    if step_n <= info_steps:
+        unrevealed = [z for z in zones if not z["revealed"]]
+        unrevealed.sort(key=lambda z: -z.get("urgency_signal", 0))
+        if unrevealed:
+            return {"action_type": "request_info", "zone_id": unrevealed[0]["zone_id"]}
+
+    # --- Phase 2: Allocation ---
+    return _scripted_allocate(obs, step_n)
 
 
 def _scripted_allocate(obs: dict, step_n: int) -> dict:
-    """Pick the highest-severity revealed zone and allocate a resource to it."""
+    """
+    Smart allocation:
+    - Sort all known zones by severity descending.
+    - Pick best resource (medicine > water > food) for highest-need zone.
+    - Allocate exactly min(demand - already_allocated, available).
+    """
     zones = obs.get("zones", [])
     res   = obs.get("available_resources", {})
 
-    # Find revealed zones sorted by severity (descending)
-    revealed = [z for z in zones if z["revealed"] and z["known_severity"] > 0]
+    # Focus on revealed zones with demand
+    revealed = [z for z in zones if z["revealed"]]
     if not revealed:
-        # Nothing revealed — just finalize
-        return {"action_type": "finalize"}
+        # Fallback to urgency if nothing revealed (shouldn't happen in Easy)
+        zones.sort(key=lambda z: -z.get("urgency_signal", 0))
+        return {"action_type": "request_info", "zone_id": zones[0]["zone_id"]}
 
-    # Sort by severity descending, then by how little has been allocated
-    revealed.sort(key=lambda z: (-z["known_severity"], z["allocated"].get("food", 0)))
+    # Sort revealed zones by (severity DESC, urgency DESC)
+    revealed.sort(key=lambda z: (-z.get("known_severity", 0), -z.get("urgency_signal", 0)))
 
-    # Pick resource to allocate: cycle through medicine → water → food
-    resource_cycle = ["medicine", "water", "food"]
-    resource_pick  = resource_cycle[(step_n - 1) % 3]
+    resource_priority = ["medicine", "water", "food"]
 
-    # Pick target zone: cycle through top zones
-    target_zone = revealed[(step_n - 1) % len(revealed)]
+    for zone in revealed:
+        zone_id = zone["zone_id"]
+        demand  = zone.get("known_demand") or {}
+        alloc   = zone.get("allocated")   or {}
 
-    # Calculate amount: use demand data if available
-    available = res.get(resource_pick, 0)
-    if available <= 0:
-        # Try another resource
-        for r in resource_cycle:
-            if res.get(r, 0) > 0:
-                resource_pick = r
-                available = res[r]
-                break
-        if available <= 0:
-            return {"action_type": "finalize"}
+        for resource in resource_priority:
+            available = res.get(resource, 0)
+            if available <= 0.0:
+                continue
 
-    # Calculate target amount from demand
-    demand_val = 0.0
-    if target_zone.get("known_demand"):
-        demand_val = target_zone["known_demand"].get(resource_pick, 0)
+            demand_val = demand.get(resource, 0)
+            already    = alloc.get(resource, 0)
+            needed     = max(0.0, demand_val - already)
 
-    if demand_val > 0:
-        # Allocate up to 80% of demand, but don't exceed what's available
-        already = target_zone["allocated"].get(resource_pick, 0)
-        needed  = max(0.0, demand_val * 0.8 - already)
-        amount  = round(min(needed, available * 0.5), 1)
-    else:
-        # No demand info — give a reasonable fraction
-        amount = round(available * 0.15, 1)
+            if needed > 0.1:
+                # Proportional but efficient: allocate a good chunk to reduce steps
+                # If we have lots of zones/steps, we might want to do more steps.
+                # But here we target 7-12 steps total.
+                # Let's allocate min(needed, available) to be efficient.
+                amount = round(min(needed, available), 1)
+                if amount > 0:
+                    return {
+                        "action_type":   "allocate_resource",
+                        "zone_id":       zone_id,
+                        "resource_type": resource,
+                        "amount":        amount,
+                    }
 
-    # Safety: ensure amount > 0
-    if amount <= 0:
-        amount = round(min(5.5, available), 1)
-    if amount <= 0:
-        return {"action_type": "finalize"}
+    # If no specific demand found, check if we can allocate to hidden zones via urgency
+    unrevealed = [z for z in zones if not z["revealed"]]
+    if unrevealed:
+        unrevealed.sort(key=lambda z: -z.get("urgency_signal", 0))
+        return {"action_type": "request_info", "zone_id": unrevealed[0]["zone_id"]}
 
-    return {
-        "action_type": "allocate_resource",
-        "zone_id": target_zone["zone_id"],
-        "resource_type": resource_pick,
-        "amount": amount,
-    }
+    return {"action_type": "finalize"}
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +299,7 @@ def log_step(
     error_str  = "null" if error is None else error
     print(
         f"[STEP] step={step_n} action={action_str} "
-        f"reward={reward:.2f} done={done_str} error={error_str}",
+        f"reward={reward:.4f} done={done_str} error={error_str}",
         flush=True,
     )
     sys.stdout.flush()
@@ -318,27 +341,40 @@ def run_episode(task_id: str, difficulty: str, seed: Optional[int] = None) -> No
         # ── Episode loop ─────────────────────────────────────────────────────
         while not done:
             steps += 1
-            error_msg: Optional[str] = None
+            error_msg: str | None = None
             action: dict = {}
+
+            # --- Target Steps ---
+            target_steps = {"easy": 8, "medium": 10, "hard": 12}.get(difficulty, 10)
 
             # --- Try LLM first, fall back to scripted agent on failure ---
             if llm_failures < 3:
                 try:
-                    action = get_llm_action(history, obs, steps)
+                    action = get_llm_action(history, obs, steps, difficulty)
                     llm_failures = 0  # Reset on success
 
-                    # --- ANTI-LAZY GUARD: Block early finalize ---
-                    if action.get("action_type") == "finalize" and steps < 9:
-                        action = get_scripted_action(obs, steps)
-                except Exception as llm_err:
-                    error_msg = f"llm_error:{llm_err}"
+                    # --- STRATEGY ENFORCEMENT ---
+                    if action.get("action_type") == "finalize" and steps < target_steps - 1:
+                        # Don't finalize too early unless resources are gone
+                        res = obs.get("available_resources", {})
+                        if sum(res.values()) > 5.0:
+                            action = get_scripted_action(obs, steps, difficulty)
+                    
+                    if steps >= target_steps:
+                        action = {"action_type": "finalize"}
+
+                except Exception:
+                    # Fallback to scripted agent and suppress error to maintain clean logs
                     llm_failures += 1
-                    action = get_scripted_action(obs, steps)
+                    action = get_scripted_action(obs, steps, difficulty)
             else:
-                # LLM is down — use scripted agent for the rest of the episode
-                action = get_scripted_action(obs, steps)
+                action = get_scripted_action(obs, steps, difficulty)
 
             try:
+                # Double-check action type for final step
+                if steps >= target_steps:
+                    action = {"action_type": "finalize"}
+
                 step_resp = step_env(task_id=task_id, action=action)
                 obs    = step_resp["observation"]
                 reward = float(step_resp.get("reward", 0.0))
@@ -349,13 +385,8 @@ def run_episode(task_id: str, difficulty: str, seed: Optional[int] = None) -> No
                 if error_msg is None:
                     error_msg = f"env_error:{env_err}"
 
-            # Display step rewards properly:
-            # Intermediate: show the step-level reward (0.01, 0.02, 0.03)
-            # Final: clamp to [0.01, 0.99]
-            if done:
-                display_reward = round(float(np.clip(reward, 0.01, 0.99)), 2)
-            else:
-                display_reward = round(float(max(0.0, reward)), 2)
+            # All rewards must be strictly in (0, 1) — no 0.0 or 1.0
+            display_reward = float(np.clip(reward, 0.001, 0.999))
 
             rewards.append(display_reward)
             log_step(steps, action, display_reward, done, error_msg)

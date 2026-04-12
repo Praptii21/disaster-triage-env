@@ -352,8 +352,8 @@ async def step(request: Request) -> StepResponse:
     action = _parse_action(req)
     obs, reward, done, info = env.step(action)
 
-    # Clamp only terminal rewards to [0.01, 0.99]
-    final_reward = _clamp_reward(reward) if done else round(float(reward), 2)
+    # All rewards (including intermediate) must be strictly in (0, 1)
+    final_reward = _clamp_reward(reward)
     clean_info   = _strip_reward_from_info(info)
 
     return StepResponse(

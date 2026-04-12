@@ -39,6 +39,19 @@ LOW_SEVERITY_MAX_FRACTION:  float = 0.40
 
 
 # ---------------------------------------------------------------------------
+# Safe score guard — guarantees score is NEVER exactly 0.0 or 1.0
+# ---------------------------------------------------------------------------
+
+def safe_score(score: float) -> float:
+    """Ensure score is strictly within (0, 1) — never 0.0 or 1.0."""
+    if score >= 1.0:
+        score = 0.999
+    elif score <= 0.0:
+        score = 0.001
+    return round(score, 4)   # 4dp prevents rounding to 1.0000
+
+
+# ---------------------------------------------------------------------------
 # DisasterTriageGrader
 # ---------------------------------------------------------------------------
 
@@ -80,18 +93,18 @@ class DisasterTriageGrader:
             + W_UTILIZATION  * utilization
         )
 
-        # STRICT COMPLIANCE: Force score into (0.01, 0.99) range.
-        # No exactly 0.0, no exactly 1.0.
-        clamped_score = float(np.clip(final_score, 0.01, 0.99))
+        # STRICT COMPLIANCE: pass through safe_score to guarantee
+        # the result is NEVER exactly 0.0 or 1.0.
+        clamped_score = safe_score(final_score)
 
         breakdown: Dict[str, float] = {
             "prioritization": round(prioritization, 4),
             "efficiency":     round(efficiency, 4),
             "utilization":    round(utilization, 4),
-            "final_score":    round(clamped_score, 3),
+            "final_score":    clamped_score,
         }
 
-        return round(clamped_score, 3), breakdown
+        return clamped_score, breakdown
 
     # -----------------------------------------------------------------------
     # Axis 1 – Prioritization Accuracy (50%)
