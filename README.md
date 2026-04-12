@@ -145,7 +145,7 @@ export HF_TOKEN="your_token_here"
 python server/app.py
 
 # 4. Run Baseline Inference
-python inference.py --task medium
+python inference.py 
 ```
 
 ### 🐳 Docker Instructions
