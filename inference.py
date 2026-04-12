@@ -69,7 +69,7 @@ client = OpenAI(
 # ---------------------------------------------------------------------------
 
 # Local FastAPI server detection (dynamic port for Docker/HF)
-_LOCAL_PORT = os.getenv("PORT", "7860")
+_LOCAL_PORT = os.getenv("BACKEND_PORT", "8000")
 ENV_SERVER_URL: str = f"http://127.0.0.1:{_LOCAL_PORT}"
 
 
