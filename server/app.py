@@ -192,10 +192,10 @@ def run_simulation(task: str) -> Generator:
             yield "\n".join(logs); return
         
         data = resp.json(); obs = data.get("observation", {}); done = data.get("done", False)
-        rewards_list = []
+        history = []; step = 0; rewards_list = []
         model = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
         
-        # [START] task=<task_name> env=<benchmark> model=<model_name>
+        # [START] task=<task_name> env=disaster-triage-env model=<model_name>
         logs.append(f"[START] task={task} env=disaster-triage-env model={model}")
         yield "\n".join(logs)
 
