@@ -49,20 +49,17 @@ MODEL_NAME:   str = os.getenv("MODEL_NAME",   "gpt-4.1-mini")
 HF_TOKEN:     str | None = os.getenv("HF_TOKEN")
 
 if not HF_TOKEN:
-    print("[END] success=false steps=0 rewards=", flush=True)
-    raise EnvironmentError(
-        "HF_TOKEN environment variable is not set. "
-        "Add it to your .env file or export it before running."
+    print("[WARN] HF_TOKEN not found. Simulation will fail until a secret is provided.")
+    # We define a dummy client to avoid crash during import
+    client = None 
+else:
+    # ---------------------------------------------------------------------------
+    # OpenAI client (OpenAI-compatible, pointed at API_BASE_URL)
+    # ---------------------------------------------------------------------------
+    client = OpenAI(
+        base_url=API_BASE_URL,
+        api_key=HF_TOKEN,
     )
-
-# ---------------------------------------------------------------------------
-# OpenAI client (OpenAI-compatible, pointed at API_BASE_URL)
-# ---------------------------------------------------------------------------
-
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=HF_TOKEN,
-)
 
 # ---------------------------------------------------------------------------
 # Server interaction helpers

@@ -12,13 +12,14 @@ while ! curl -s http://127.0.0.1:8000/health > /dev/null; do
 done
 echo "Backend Server is UP!"
 
-# 3. Run the initial baseline inference
-echo "Running baseline inference..."
-python inference.py
-
-# 4. Start the Gradio Console UI on the public port
+# 3. Start the Gradio Console UI on the public port (Background)
+# Occupying port 7860 immediately prevents HF timeouts.
 echo "Starting Gradio Console on public port ${PORT:-7860}..."
-python ui.py
+python ui.py &
+
+# 4. Run the initial baseline inference (Background)
+echo "Running baseline inference..."
+python inference.py &
 
 # 5. Keep the container alive
 wait
