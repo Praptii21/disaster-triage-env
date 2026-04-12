@@ -246,15 +246,14 @@ footer { display: none !important; }
 """
 
 with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
-
     gr.HTML("""
     <div style="border-left: 3px solid #ff4444; padding-left: 1.2rem; margin-bottom: 2rem;">
         <h1 style="font-family: Syne, sans-serif; font-size: 2rem; font-weight: 800; color: #ffffff; letter-spacing: -0.02em; margin: 0 0 0.3rem 0;">
-            🚨 DISASTER TRIAGE
+            DISASTER TRIAGE
         </h1>
-      <p style="color: #64748b; font-size: 0.85rem; font-style: italic; margin-top: 0.5rem; line-height: 1.4;">
-      Strategic multi-objective allocation of food, water, and medicine under partial observability.
-      </p>
+        <p style="color: #64748b; font-size: 0.85rem; font-style: italic; margin-top: 0.5rem; line-height: 1.4;">
+            Strategic multi-objective allocation of food, water, and medicine under partial observability.
+        </p>
     </div>
     """)
 
