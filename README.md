@@ -14,11 +14,17 @@ tags:
 license: mit
 short_description: Strategic triage benchmark for resource-constrained agents.
 ---
+---
+
+🔗 **Live Demo**:
+
+**[![Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-blue)](https://huggingface.co/spaces/Sammeshbabu/Disater-triage-env)**
+
+---
+
 # 🚨 Disaster Triage Environment (DTE)
 
 An OpenEnv-compliant reinforcement learning benchmark for evaluating agentic decision-making in resource-constrained disaster logistics.
-
----
 
 ## 🔹 Problem Statement
 In the immediate aftermath of a disaster, responders are faced with a chaotic "Fog of War." Resources are finite, timelines are compressed, and information is often missing or noisy. This is not just a pattern recognition task—it is **high-stakes decision-making under severe constraints.**
