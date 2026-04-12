@@ -11,7 +11,7 @@ tags:
   - agentic-ai
   - pomdp
   - rescue-logistics
-short_description: Deterministic evaluation of agentic decision-making in disaster triage.
+short_description: Strategic triage benchmark for resource-constrained agents.
 ---
 # 🚨 Disaster Triage Environment (DTE)
 
