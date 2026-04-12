@@ -1,4 +1,4 @@
-import time
+mport time
 import os
 import json
 import uvicorn
@@ -152,23 +152,28 @@ def run_simulation(task: str) -> Generator:
             rewards_list.append(reward)
 
             action_type = action.get("action_type", "")
-            zone        = action.get("zone_id", "")
-            resource    = action.get("resource_type", "")
-            amount      = action.get("amount", "")
-            action_json = json.dumps(action, separators=(',', ':'))
+            zone = action.get("zone_id", "")
+            resource = action.get("resource_type", "")
+            amount = action.get("amount", "")
 
-            resource_icons = {"food": "🍱", "water": "💧", "medicine": "🧪"}
-            icon = resource_icons.get(resource, "📦")
-
+            # Pretty action label
             if action_type == "request_info":
-                logs.append(f"  🔍 [RECON]    Zone: {zone} | Status: Scanning")
+                action_label = f"🔍 INFO      {zone}"
             elif action_type == "allocate_resource":
-                logs.append(f"  {icon} [DISPATCH] Zone: {zone} | Supply: {resource.upper()} | Qty: {amount} units")
-                logs.append(f"     [TELEMETRY] Step: {step_n} | Reward: {reward:.4f} | Status: Operational")
+                action_label = f"📦 ALLOCATE  {zone} ← {resource} ×{amount}"
             elif action_type == "finalize":
-                logs.append(f"  ✔  [FINALIZE] Closing episode — triggering grader evaluation")
+                action_label = f"✔  FINALIZE"
+            else:
+                action_label = action_type
 
-            logs.append(f"     [STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null")
+            reward_bar = "█" * int(reward * 20)
+            action_json = json.dumps(action, separators=(',', ':'))
+            logs.append(
+                f"  [{step_n:02d}] {action_label:<35} reward={reward:.4f} {reward_bar}"
+            )
+            logs.append(
+                f"       [STEP] step={step_n} action={action_json} reward={reward:.4f} done={str(done).lower()} error=null"
+            )
             yield "\n".join(logs)
             time.sleep(1.0)
 
@@ -199,6 +204,29 @@ body, .gradio-container {
     max-width: 900px !important;
     margin: 0 auto !important;
     padding: 2rem !important;
+}
+
+#title-block {
+    border-left: 3px solid #ff4444;
+    padding-left: 1.2rem;
+    margin-bottom: 2rem;
+}
+
+#title-block h1 {
+    font-family: 'Syne', sans-serif !important;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.3rem 0 !important;
+}
+
+#title-block p {
+    color: #ff4444 !important;
+    font-size: 0.75rem !important;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin: 0 !important;
 }
 
 .label-wrap label span {
@@ -247,17 +275,16 @@ textarea {
 footer { display: none !important; }
 """
 
-with gr.Blocks(css=CSS, title="DISASTER TRIAGE ENV // COMMAND") as demo:
-    gr.HTML("""
-    <div style="border-left: 3px solid #ff4444; padding-left: 1.2rem; margin-bottom: 2rem;">
-        <h1 style="font-family: Syne, sans-serif; font-size: 2rem; font-weight: 800; color: #ffffff; letter-spacing: -0.02em; margin: 0 0 0.3rem 0;">
-            <strong> DISASTER TRIAGE ENV</strong>
-        </h1>
-        <p style="color: #64748b; font-size: 0.85rem; font-style: italic; margin-top: 0.5rem; line-height: 1.4;">
-            Strategic multi-objective allocation of food, water, and medicine under partial observability.
-        </p>
-    </div>
-    """)
+with gr.Blocks(css=CSS, title="DISASTER TRIAGE // COMMAND") as demo:
+
+    with gr.Column(elem_id="title-block"):
+        gr.HTML("""
+        <div id="title-block">
+            <h1> DISASTER TRIAGE ENV</h1>
+            <p>Dynamic Resource Orchestration & Logistics Optimization Benchmark</p>
+            <p>Strategic multi-objective allocation of food, water, and medicine under partial observability.</p>
+        </div>
+        """)
 
     with gr.Row():
         task_input = gr.Dropdown(
@@ -266,7 +293,11 @@ with gr.Blocks(css=CSS, title="DISASTER TRIAGE ENV // COMMAND") as demo:
             label="MISSION PRIORITY",
             scale=1,
         )
-        start_btn = gr.Button("▶ DEPLOY AGENT", variant="primary", scale=1)
+        start_btn = gr.Button(
+            "▶ DEPLOY AGENT",
+            variant="primary",
+            scale=1,
+        )
 
     gr.HTML("<div style='height:12px'></div>")
 
@@ -280,3 +311,11 @@ with gr.Blocks(css=CSS, title="DISASTER TRIAGE ENV // COMMAND") as demo:
     )
 
     start_btn.click(fn=run_simulation, inputs=[task_input], outputs=[log_output])
+
+app = gr.mount_gradio_app(app, demo, path="/")
+
+def main():
+    uvicorn.run(app, host="0.0.0.0", port=7860)
+
+if __name__ == "__main__":
+    main()
