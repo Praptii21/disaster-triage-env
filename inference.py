@@ -306,8 +306,15 @@ def log_step(
 def log_end(success: bool, steps: int, rewards: list[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
 
-    total_reward = sum(rewards)
-    score = min(max(total_reward, 0.0), 1.0)
+    # The final mission score is the LAST reward returned by the environment
+    # (which includes the terminal grader evaluation).
+    if rewards:
+        score = rewards[-1]
+    else:
+        score = 0.001
+
+    # Ensure strictly within (0, 1)
+    score = float(np.clip(score, 0.001, 0.999))
 
     print(
         f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
@@ -401,7 +408,7 @@ def run_episode(task_id: str, difficulty: str, seed: Optional[int] = None) -> No
     except Exception as fatal:
         # Always emit [END] even on fatal errors
         error_line = f"fatal_error:{fatal}"
-        log_step(steps + 1, {}, 0.0, True, error_line)
+        log_step(steps + 1, {}, 0.001, True, error_line)
 
     finally:
         log_end(success=success, steps=steps, rewards=rewards)

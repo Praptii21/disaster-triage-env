@@ -44,11 +44,10 @@ LOW_SEVERITY_MAX_FRACTION:  float = 0.40
 
 def safe_score(score: float) -> float:
     """Ensure score is strictly within (0, 1) — never 0.0 or 1.0."""
-    if score >= 1.0:
-        score = 0.999
-    elif score <= 0.0:
-        score = 0.001
-    return round(score, 4)   # 4dp prevents rounding to 1.0000
+    # Round first to avoid floating point noise, then clip to keep it strictly in (0, 1)
+    # Using 0.0001 to 0.9999 range as per hackathon requirements
+    clamped = float(np.clip(round(float(score), 4), 0.0001, 0.9999))
+    return clamped
 
 
 # ---------------------------------------------------------------------------
@@ -106,204 +105,69 @@ class DisasterTriageGrader:
 
         return clamped_score, breakdown
 
-    # -----------------------------------------------------------------------
-    # Axis 1 – Prioritization Accuracy (50%)
-    # -----------------------------------------------------------------------
-
     def _prioritization_score(self, zones: List[Zone]) -> float:
-        """
-        Checks whether the agent respected severity-based allocation rules:
-
-          High severity (≥ 4) → must receive ≥ 60 % of true demand
-          Low  severity (≤ 2) → must receive ≤ 20 % of true demand
-          Medium severity     → smooth proportional score
-
-        Returns: float in [0, 1]
-        """
-        if not zones:
-            return 0.0
-
-        scores:  List[float] = []
-        weights: List[float] = []
-
+        if not zones: return 0.0
+        scores: List[float] = []; weights: List[float] = []
         for zone in zones:
-            demand_total = zone.true_demand.total()
-            alloc_total  = zone.allocated.total()
-
-            # Weight: High severity (4-5) gets weight 2.0, others 1.0
+            demand_total = zone.true_demand.total(); alloc_total = zone.allocated.total()
             weight = 2.0 if zone.true_severity >= HIGH_SEVERITY_THRESHOLD else 1.0
             weights.append(weight)
-
             if demand_total <= 0.0:
-                scores.append(1.0)
-                continue
-
+                scores.append(1.0); continue
             fraction = alloc_total / demand_total
-
             if zone.true_severity >= HIGH_SEVERITY_THRESHOLD:
-                # High severity: reward proportionally, full score at 40%+ of demand
-                if fraction >= HIGH_SEVERITY_MIN_FRACTION:
-                    score = 1.0
-                else:
-                    # Gentler curve: partial credit scales smoothly
-                    score = (fraction / HIGH_SEVERITY_MIN_FRACTION) * 0.8
+                score = 1.0 if fraction >= HIGH_SEVERITY_MIN_FRACTION else (fraction / HIGH_SEVERITY_MIN_FRACTION) * 0.8
             elif zone.true_severity <= LOW_SEVERITY_THRESHOLD:
-                if fraction <= LOW_SEVERITY_MAX_FRACTION:
-                    score = 1.0
-                else:
-                    # Gentle penalty for over-serving low priority
-                    excess = fraction - LOW_SEVERITY_MAX_FRACTION
-                    score = max(0.0, 1.0 - excess * 1.0)
+                score = 1.0 if fraction <= LOW_SEVERITY_MAX_FRACTION else max(0.0, 1.0 - (fraction - LOW_SEVERITY_MAX_FRACTION) * 1.0)
             else:
-                # Medium severity: broad acceptable range (20%-80%)
-                target = 0.50
-                distance = abs(fraction - target)
-                score = max(0.0, 1.0 - distance * 1.0)
-
-            # Information Bonus: +0.05 if it's the highest severity zone and was revealed
+                score = max(0.0, 1.0 - abs(fraction - 0.50) * 1.0)
             is_highest = (zone.true_severity == max(z.true_severity for z in zones))
             if is_highest and zone.revealed:
                 score = min(1.0, score + 0.05)
-
             scores.append(float(np.clip(score, 0.0, 1.0)))
-
         return float(np.average(scores, weights=weights))
 
-    # -----------------------------------------------------------------------
-    # Axis 2 – Allocation Efficiency (30%)
-    # -----------------------------------------------------------------------
-
     def _allocation_efficiency(self, zones: List[Zone]) -> float:
-        """
-        Measures how accurately allocations matched true demand.
-
-        Uses inverse Mean Absolute Error (MAE) normalized per resource per zone.
-        A perfect match → 0 MAE → efficiency = 1.0.
-
-        Returns: float in [0, 1]
-        """
-        if not zones:
-            return 0.0
-
+        if not zones: return 0.0
         errors: List[float] = []
-
         for zone in zones:
             for resource in ResourceType:
-                demand = getattr(zone.true_demand, resource.value)
-                alloc  = getattr(zone.allocated,   resource.value)
-
-                if demand > 0.0:
-                    # Normalize by demand so all resources are on the same scale
-                    normalized_error = abs(alloc - demand) / demand
-                    errors.append(min(normalized_error, 1.0))
-                else:
-                    # No demand for this resource — any allocation is waste
-                    if alloc > 0.0:
-                        errors.append(1.0)
-                    # else perfectly correct (zero demand, zero alloc)
-
-        if not errors:
-            return 1.0
-
-        mae        = float(np.mean(errors))
-        # Softer efficiency curve: square root to reward partial effort
+                demand = getattr(zone.true_demand, resource.value); alloc = getattr(zone.allocated, resource.value)
+                if demand > 0.0: errors.append(min(abs(alloc - demand) / demand, 1.0))
+                elif alloc > 0.0: errors.append(1.0)
+        if not errors: return 1.0
+        mae = float(np.mean(errors))
         efficiency = 1.0 - (mae ** 0.7)
-
-        # Efficiency Penalty: Subtract 0.05 for every zone that is significantly over-allocated (>110%)
         over_allocation_penalty = 0.0
         for zone in zones:
             if zone.true_demand.total() > 0:
                 if (zone.allocated.total() / zone.true_demand.total()) > 1.10:
                     over_allocation_penalty += 0.05
+        return float(np.clip(efficiency - over_allocation_penalty, 0.0, 1.0))
 
-        efficiency = max(0.0, efficiency - over_allocation_penalty)
-        return float(np.clip(efficiency, 0.0, 1.0))
-
-    # -----------------------------------------------------------------------
-    # Axis 3 – Resource Utilization (20%)
-    # -----------------------------------------------------------------------
-
-    def _resource_utilization(
-        self,
-        initial_resources:   ResourceBundle,
-        remaining_resources: ResourceBundle,
-        zones:               List[Zone],
-    ) -> float:
-        """
-        Rewards the agent for converting available resources into impact
-        without over-allocating or leaving large surpluses.
-
-        Strategy:
-          productive = sum of min(alloc, demand) across all zones × resources
-          utilization = productive / min(total_initial, total_true_demand)
-
-        Returns: float in [0, 1]
-        """
-        initial_total = initial_resources.total()
-        if initial_total <= 0.0:
-            return 1.0
-
-        # Sum up how much allocation actually met genuine demand
-        productive  = 0.0
-        total_demand = 0.0
-
+    def _resource_utilization(self, initial, remaining, zones) -> float:
+        initial_total = initial.total()
+        if initial_total <= 0.0: return 1.0
+        productive = 0.0; total_demand = 0.0
         for zone in zones:
             for resource in ResourceType:
-                demand    = getattr(zone.true_demand, resource.value)
-                alloc     = getattr(zone.allocated,   resource.value)
-                productive  += min(alloc, max(demand, 0.0))
-                total_demand += max(demand, 0.0)
-
+                demand = getattr(zone.true_demand, resource.value); alloc = getattr(zone.allocated, resource.value)
+                productive += min(alloc, max(demand, 0.0)); total_demand += max(demand, 0.0)
         if total_demand <= 0.0:
-            # No demand anywhere — best score if nothing was deployed
-            deployed = initial_total - remaining_resources.clamp_positive().total()
+            deployed = initial_total - remaining.clamp_positive().total()
             return 1.0 if deployed == 0.0 else 0.0
-
-        # Upper-bound productive deployment by what was available
         denominator = min(initial_total, total_demand)
-        utilization = productive / denominator
-        return float(np.clip(utilization, 0.0, 1.0))
+        return float(np.clip(productive / denominator, 0.0, 1.0))
 
-    # -----------------------------------------------------------------------
-    # Diagnostic helpers
-    # -----------------------------------------------------------------------
-
-    def explain(
-        self,
-        zones:               List[Zone],
-        initial_resources:   ResourceBundle,
-        available_resources: ResourceBundle,
-    ) -> Dict[str, object]:
-        """
-        Return a human-readable breakdown of every zone's contribution
-        to the final score, useful for debugging agents.
-        """
-        _, breakdown = self.compute_final_score(
-            zones, initial_resources, available_resources
-        )
-
+    def explain(self, zones, initial, available) -> Dict[str, object]:
+        _, breakdown = self.compute_final_score(zones, initial, available)
         zone_details = []
         for zone in zones:
-            demand_total = zone.true_demand.total()
-            alloc_total  = zone.allocated.total()
-            fraction     = alloc_total / demand_total if demand_total > 0 else 0.0
-
+            demand_total = zone.true_demand.total(); alloc_total = zone.allocated.total()
             zone_details.append({
-                "zone_id":        zone.zone_id,          # e.g. "Z0", "Z1", ...
-                "severity":       zone.true_severity,
-                "revealed":       zone.revealed,
-                "urgency_signal": round(zone.urgency_signal, 4),  # float 0–1
-                "true_demand":    zone.true_demand.to_dict(),
-                "allocated":      zone.allocated.to_dict(),
-                "alloc_fraction": round(fraction, 4),
+                "zone_id": zone.zone_id, "severity": zone.true_severity, "revealed": zone.revealed,
+                "urgency_signal": round(zone.urgency_signal, 4), "true_demand": zone.true_demand.to_dict(),
+                "allocated": zone.allocated.to_dict(), "alloc_fraction": round(alloc_total / demand_total if demand_total > 0 else 0.0, 4),
             })
-
-        return {
-            "score_breakdown": breakdown,
-            "zone_details":    zone_details,
-            "weights": {
-                "prioritization": W_PRIORITIZATION,
-                "efficiency":     W_EFFICIENCY,
-                "utilization":    W_UTILIZATION,
-            },
-        }
+        return {"score_breakdown": breakdown, "zone_details": zone_details,
+                "weights": {"prioritization": W_PRIORITIZATION, "efficiency": W_EFFICIENCY, "utilization": W_UTILIZATION}}

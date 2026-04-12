@@ -46,8 +46,8 @@ STEP_PROGRESS:  float = 0.01   # base progress reward each step
 # Difficulty scaling factors
 DIFFICULTY_SCALE = {
     "easy":   1.00,
-    "medium": 0.97,
-    "hard":   0.92,
+    "medium": 0.82,  # Widen the gap to ensure hierarchy
+    "hard":   0.68,
 }
 
 
@@ -392,8 +392,10 @@ class DisasterTriageEnv:
             else:
                 step_reward = BAD_ACTION        # 0.01 — nothing allocated
 
-        # ── Diminishing returns ──────────────────────────────────────────
-        step_reward = step_reward / (1.0 + 0.1 * self.step_count)
+        # ── Diminishing returns (Difficulty-aware) ──────────────────────
+        # Easy is less punishing than Hard to maintain the score hierarchy.
+        decay_rate = {"easy": 0.04, "medium": 0.07, "hard": 0.10}.get(self.difficulty.value, 0.10)
+        step_reward = step_reward / (1.0 + decay_rate * self.step_count)
 
         # ── Final clamp: strictly (0, 1) ─────────────────────────────────
         return safe_score(step_reward)
