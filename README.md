@@ -11,7 +11,6 @@ tags:
   - agentic-ai
   - pomdp
   - rescue-logistics
-license: mit
 short_description: Strategic triage benchmark for resource-constrained agents.
 ---
 ---
