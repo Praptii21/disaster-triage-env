@@ -123,6 +123,8 @@ Zones that are revealed but not acted upon within a limited number of steps expe
 | **Medium** | 5 Zones with partial hidden information | 10 | ~50% Revealed | Explore vs Exploit |
 | **Hard** | 7 Zones with high uncertainty and tight budget | 13 | Fully Hidden | Prioritization under constraints |
 
+📌 Demo Configuration Note: The step budgets above (7/10/13) are optimized for rapid evaluation during this submission. The full environment is architected to support 30 / 40 / 70 step budgets for Easy / Medium / Hard respectively, enabling deeper multi-phase strategies, richer explore-exploit tradeoffs, and more realistic crisis timelines. 
+
 ---
 
 ## 🧠 Environment Design
@@ -239,10 +241,6 @@ Traditional RL benchmarks (Atari, Gym) typically optimize for a single scalar re
 ---
 
 ## 🤖 Baseline Agent (`inference.py`)
-
-<img width="600" height="900" alt="_- visual selection" src="https://github.com/user-attachments/assets/b65a6a3e-183f-4b62-b0d4-933a99b27d14" />
-
-
 
 The baseline agent simulates an LLM-driven disaster response coordinator:
 - Executes a full agent loop using `/reset` and `/step`
