@@ -129,16 +129,14 @@ Zones that are revealed but not acted upon within a limited number of steps expe
 
 ## 🧠 Environment Design
 
-### 🎮 Action Space
-- **`request_info`**
-  - Reveals true severity and demand for a zone
-  - → Trade-off: costs a step, but reduces uncertainty
-- **`allocate_resource`**
-  - Allocates a specific quantity of a resource to a zone
-  - → Constraint: irreversible and bounded by global supply
-- **`finalize`**
-  - Terminates the episode and triggers final evaluation
-  - → Risk: premature finalization reduces achievable score
+## 🎮 Action Space
+
+| Action Type | Parameters | Description | Trade-off | Conditions | Step Reward |
+|---|---|---|---|---|---|
+| **`request_info`** | `zone_id` | Reveals true severity and demand for a zone | Costs 1 step but reduces uncertainty | Available for unrevealed zones | `+0.02` |
+| **`allocate_resource`** | `zone_id`, `resource_type`, `amount` | Allocates a specific quantity of resource to a zone | Irreversible; bounded by global supply | Must have sufficient resources; amount > 0 | `+0.05` (if severity ≥ 4) |
+| **`finalize`** | None | Terminates the episode and triggers final grading | Premature finalization reduces achievable score | Can be called at any time | `-0.005` per step taken |
+
 
 ### 👁️ Observation Space
 At each step, the agent receives:
@@ -151,7 +149,6 @@ At each step, the agent receives:
 - **`step_count` / `max_steps`**: Tracks remaining decision budget
 - **`data_completeness`**: Fraction of zones with revealed ground-truth data
 
----
 
 ---
 
@@ -240,14 +237,23 @@ Traditional RL benchmarks (Atari, Gym) typically optimize for a single scalar re
 
 ---
 
-## 🤖 Baseline Agent (`inference.py`)
+### 🤖 **Baseline Agent Execution Phases**
 
-The baseline agent simulates an LLM-driven disaster response coordinator:
-- Executes a full agent loop using `/reset` and `/step`
-- Interprets observations into structured decision context
-- Balances exploration (`request_info`) and execution (`allocate_resource`)
-- Emits strictly formatted logs: `[START]`, `[STEP]`, `[END]`
-- Produces fully reproducible evaluation runs for all difficulty tiers
+#### **Phase 1: Information Gathering**
+- Request info for unrevealed zones with highest urgency
+- Prioritize by `urgency_signal` (noisy proxy for severity)
+- Skip this phase in Easy mode
+
+#### **Phase 2: Allocation**
+- Sort revealed zones by severity (descending)
+- Allocate resources in priority order: **medicine > water > food**
+- For each zone: `amount = min(demand - already_allocated, available)`
+- Continue until resources exhausted or target steps reached
+
+#### **Phase 3: Finalization**
+- Call `finalize()` at target step count
+- Triggers grader computation
+- Returns final episode reward
 ### 📊 Sample Output
 ```text
 [START] task=medium env=disaster-triage-env model=llama-3.1-8b-instant
